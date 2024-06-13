@@ -1,0 +1,27 @@
+;;; user interface
+
+(setq package-enable-at-startup nil)
+(setq inhibit-splash-screen t)
+(push '(menu-bar-lines . 0) default-frame-alist)
+(push '(tool-bar-lines . 0) default-frame-alist)
+(push '(vertical-scroll-bars) default-frame-alist)
+;;(push '(alpha-background . 80) default-frame-alist)
+
+;;; end
+
+
+;;; font
+
+(defvar font-list
+  (cond
+   ((eq system-type 'darwin)
+    '(("MonoLisa Nasy" . 15) ("Monaco" . 13) ("Menlo" . 13)))
+   ((eq system-type 'windows-nt)
+    '(("MonoLisa Nasy" . 12) ("Consolas" . 12) ("Cascadia Mono" . 11)))
+   (t
+    '(("MonoLisa Nasy" . 11) ("SF Mono" . 11) ("Consolas" . 12))))
+  "List of fonts and sizes.  The first one available will be used.")
+
+(add-to-list 'default-frame-alist (cons 'font (format "%s-%d" (caar font-list) (cdar font-list))))
+
+;;; end
