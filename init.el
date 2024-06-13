@@ -92,11 +92,6 @@
   (setq org-export-with-toc nil)
   (setq org-export-with-section-numbers nil)
 
-  ;; This header is inserted into the <head> section of every page:
-  ;;   (you will need to create the style sheet at
-  ;;    ~/projects/blog/static/style.css
-  ;;    and the favicon at
-  ;;    ~/projects/blog/static/favicon.ico)
   (setq org-static-blog-page-header
 	"
           <meta name=\"author\" content=\"k\">
