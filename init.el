@@ -56,6 +56,8 @@
 (recentf-mode 1)
 (savehist-mode 1)
 (delete-selection-mode 1)
+;; git clone  https://github.com/casouri/tree-sitter-module ~/Repos/tree-sitter-module
+(setq treesit-extra-load-path '("~/Repos/tree-sitter-module/dist/"))
 
 ;;; end
 
