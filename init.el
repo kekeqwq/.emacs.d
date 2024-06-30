@@ -59,12 +59,52 @@
 
 ;;; end
 
+;;; Keymap
+(global-set-key (kbd "C-c p p") 'project-switch-project)
+(global-set-key (kbd "C-c p f") 'project-find-file)
+(global-set-key (kbd "C-c p c") 'project-compile)
+(global-set-key (kbd "C-c p s") 'project-search)
+(global-set-key (kbd "C-c v v") 'vc-next-action)
+(global-set-key (kbd "C-c v c") 'vc-dir)
+(global-set-key (kbd "C-c v d") 'vc-diff)
+(global-set-key (kbd "C-c w w") 'windmove-up)
+(global-set-key (kbd "C-c w a") 'windmove-left)
+(global-set-key (kbd "C-c w s") 'windmove-down)
+(global-set-key (kbd "C-c w d") 'windmove-right)
+(global-set-key (kbd "C-c w q") 'delete-window)
+(global-set-key (kbd "C-c w 1") 'delete-other-windows)
+(global-set-key (kbd "C-c w 2") 'split-window-below)
+(global-set-key (kbd "C-c w 3") 'split-window-right)
+(global-set-key (kbd "C-c b b") 'ido-switch-buffer)
+(global-set-key (kbd "C-c b k") 'ido-kill-buffer)
+(global-set-key (kbd "C-c t t") 'org-agenda-show-all-todo)
+
+;;; end
+
+
+;;; Completion
+
+(if (fboundp 'fido-mode)
+    (progn
+      (fido-mode 1)
+      (when (fboundp 'fido-vertical-mode)
+        (fido-vertical-mode 1))
+
+      (defun fido-recentf-open ()
+        "Use `completing-read' to find a recent file."
+        (interactive)
+        (if (find-file (completing-read "Find recent file: " recentf-list))
+            (message "Opening file...")
+          (message "Aborting")))
+      (global-set-key (kbd "C-c r") 'fido-recentf-open)))
+
+;;; end
+
 
 ;;; user interface
 
 (pixel-scroll-precision-mode 1)
 (global-hl-line-mode 1)
-(load-theme 'modus-vivendi t)
 
 ;;; end
 
@@ -169,6 +209,11 @@
   (meow-setup)
   (meow-global-mode 1))
 ;;; end
+
+;;; ef-themes
+(use-package ef-themes
+  :ensure t
+  :config (load-theme 'ef-elea-dark t))
 
 
 ;;; org-static-blog
