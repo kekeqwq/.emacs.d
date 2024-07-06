@@ -21,6 +21,7 @@
                  ((zerop (apply #'call-process `("git" nil ,buffer t "clone"
                                                  ,@(when-let ((depth (plist-get order :depth)))
                                                      (list (format "--depth=%d" depth) "--no-single-branch"))
+
                                                  ,(plist-get order :repo) ,repo))))
                  ((zerop (call-process "git" nil buffer t "checkout"
                                        (or (plist-get order :ref) "--"))))
@@ -120,6 +121,7 @@
 ;;; end
 
 ;;; meow
+
 (use-package meow
   :ensure t
   :config
@@ -210,13 +212,16 @@
      '("<escape>" . ignore)))
   (meow-setup)
   (meow-global-mode 1))
+
 ;;; end
 
 ;;; ef-themes
+
 (use-package ef-themes
   :ensure t
   :config (load-theme 'ef-elea-dark t))
 
+;;; end
 
 ;;; org-static-blog
 
@@ -252,3 +257,52 @@
   (setq org-static-blog-index-front-matter
 	"<h1> Welcome to my blog </h1>\n")
   )
+
+;;; end
+
+
+;;; org-modern
+
+(use-package org-modern
+  :ensure t
+  :config
+  ;; Add frame borders and window dividers
+  (modify-all-frames-parameters
+   '((right-divider-width . 8)
+     (internal-border-width . 8)))
+  (dolist (face '(window-divider
+                  window-divider-first-pixel
+                  window-divider-last-pixel))
+    (face-spec-reset-face face)
+    (set-face-foreground face (face-attribute 'default :background)))
+  (set-face-background 'fringe (face-attribute 'default :background))
+
+  (setq
+   ;; Edit settings
+   org-auto-align-tags nil
+   org-tags-column 0
+   org-catch-invisible-edits 'show-and-error
+   org-special-ctrl-a/e t
+   org-insert-heading-respect-content t
+
+   ;; Org styling, hide markup etc.
+   org-hide-emphasis-markers t
+   org-pretty-entities t
+
+   ;; Agenda styling
+   org-agenda-tags-column 0
+   org-agenda-block-separator ?─
+   org-agenda-time-grid
+   '((daily today require-timed)
+     (800 1000 1200 1400 1600 1800 2000)
+     " ┄┄┄┄┄ " "┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄")
+   org-agenda-current-time-string
+   "◀── now ─────────────────────────────────────────────────")
+
+  ;; Ellipsis styling
+  (setq org-ellipsis "…")
+  (set-face-attribute 'org-ellipsis nil :inherit 'default :box nil)
+
+  (global-org-modern-mode))
+
+;;; end
