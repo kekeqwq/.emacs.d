@@ -17,11 +17,12 @@
    ((eq system-type 'darwin)
     '(("MonoLisa Nasy" . 15) ("Monaco" . 13) ("Menlo" . 13)))
    ((eq system-type 'windows-nt)
-    '(("MonoLisa Nasy" . 12) ("Consolas" . 12) ("Cascadia Mono" . 11)))
+    '(("Iosevka Term Curly" . 14) ("Consolas" . 12) ("Cascadia Mono" . 11)))
    (t
     '(("MonoLisa Nasy" . 11) ("SF Mono" . 11) ("Consolas" . 12))))
   "List of fonts and sizes.  The first one available will be used.")
 
 (add-to-list 'default-frame-alist (cons 'font (format "%s-%d" (caar font-list) (cdar font-list))))
 
+(set-fontset-font t 'unicode "Iosevka Term Curly")
 ;;; end
