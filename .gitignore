@@ -6,3 +6,5 @@ org-persist/
 recentf
 eln-cache/
 projects
+eshell/
+.cache/
