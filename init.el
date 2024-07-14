@@ -225,13 +225,14 @@
 
 (use-package org-static-blog
   :config
-  (setq org-static-blog-publish-title "K")
+  (setq org-static-blog-publish-title "Ανώνυμο ιστολόγιο")
   (setq org-static-blog-publish-url "")
   (setq org-static-blog-publish-directory "~/Repos/blog/")
   (setq org-static-blog-posts-directory "~/Repos/blog/posts/")
   (setq org-static-blog-drafts-directory "~/Repos/blog/drafts/")
   (setq org-static-blog-enable-tags t)
-  (setq org-export-with-toc nil)
+  (setq org-static-blog-use-preview t)
+  (setq org-export-with-toc t)
   (setq org-export-with-section-numbers nil)
 
   (setq org-static-blog-page-header
@@ -245,14 +246,15 @@
   (setq org-static-blog-page-preamble
 	"
           <div class=\"header\">
-              <a href=\"index.html\">homepage</a>
-              <a href=\"archive.html\">all posts</a>
+              <a href=\"index.html\">HOMEPAGE 🏠 /</a>
+              <a href=\"archive.html\">ALL POSTS 📄 /</a>
+              <a href=\"tags.html\">ALL POSTS BY TAGS 🏷</a>
           </div>
 ")
   (setq org-static-blog-page-postamble
-	"<center>kkk@2024</center>")
+	"<center>ανώνυμο πρόσωπο@2024</center>")
   (setq org-static-blog-index-front-matter
-	"<h1> Welcome to my blog </h1>\n")
+	"<h1>Ανώνυμο ιστολόγιο</h1>\n")
   )
 
 ;;; end
