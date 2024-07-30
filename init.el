@@ -248,7 +248,8 @@
           <div class=\"header\">
               <a href=\"index.html\">HOMEPAGE 🏠 /</a>
               <a href=\"archive.html\">ALL POSTS 📄 /</a>
-              <a href=\"tags.html\">ALL POSTS BY TAGS 🏷</a>
+              <a href=\"tags.html\">ALL POSTS BY TAGS 🏷 /</a>
+              <a href=\"2024-07-30-about.html\">ABOUT 👩‍✈️</a>
           </div>
 ")
   (setq org-static-blog-page-postamble
