@@ -408,3 +408,8 @@
 
 
 ;;; end
+
+;;; nix-mode
+(use-package nix-mode
+  :mode "\\.nix\\'")
+;;; end
