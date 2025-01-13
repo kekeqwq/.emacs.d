@@ -225,7 +225,7 @@
 
 (use-package org-static-blog
   :config
-  (setq org-static-blog-publish-title "Η Ελευθερία οδηγεί τον Λαό")
+  (setq org-static-blog-publish-title "with keke;")
   (setq org-static-blog-publish-url "")
   (setq org-static-blog-publish-directory "~/Repos/blog/")
   (setq org-static-blog-posts-directory "~/Repos/blog/posts/")
@@ -253,9 +253,9 @@
           </div>
 ")
   (setq org-static-blog-page-postamble
-	"<center>λ @ 2024-2024</center>")
+	"<center>keke @ 2024-2025</center>")
   (setq org-static-blog-index-front-matter
-	"<h1>Η Ελευθερία οδηγεί τον Λαό</h1>\n")
+	"<h1>with keke;</h1>\n")
   )
 
 ;;; end
