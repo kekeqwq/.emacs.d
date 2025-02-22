@@ -410,3 +410,6 @@
 (use-package nix-mode
   :mode "\\.nix\\'")
 ;;; end
+
+(use-package auctex
+  :mode "\\.tex\\'")
