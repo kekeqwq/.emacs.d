@@ -409,3 +409,5 @@
 
 (use-package auctex
   :mode "\\.tex\\'")
+
+(use-package lua-mode)
