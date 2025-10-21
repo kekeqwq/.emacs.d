@@ -26,3 +26,16 @@
 
 (set-fontset-font t 'unicode "Iosevka Term Curly")
 ;;; end
+
+
+;;; fix macos path
+(if (or (eq system-type 'darwin) (eq system-type 'macos))
+    (progn
+      (condition-case err
+	  (let ((path (with-temp-buffer
+			(insert-file-contents-literally "~/.path")
+			(buffer-string))))
+	    (setenv "PATH" path)
+	    (setq exec-path (append (parse-colon-path path) (list exec-directory))))
+	(error (warn "%s" (error-message-string err))))))
+;;; end
