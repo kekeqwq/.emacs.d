@@ -411,3 +411,4 @@
   :mode "\\.tex\\'")
 
 (use-package lua-mode)
+(use-package kdl-mode)
