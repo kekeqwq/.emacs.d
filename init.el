@@ -412,3 +412,4 @@
 
 (use-package lua-mode)
 (use-package kdl-mode)
+(use-package rasi-mode)
