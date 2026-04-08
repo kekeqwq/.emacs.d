@@ -1,0 +1,491 @@
+#+TITLE: Emacs 配置文件
+#+AUTHOR: keke
+#+DESCRIPTION: 基于 Org-mode 文学编程的 Emacs 配置
+#+PROPERTY: header-args:emacs-lisp :tangle init.el :results silent
+#+STARTUP: overview
+
+使用方法：在 Emacs 中打开本文件，执行 =M-x org-babel-tangle= (=C-c C-v t=)
+即可生成 =init.el= 文件。
+
+* 包管理器 (Elpaca)
+
+Elpaca 是一个现代化的 Emacs 包管理器，支持异步安装、懒加载和从 Git 仓库
+直接拉取包。以下为官方推荐的 bootstrap 代码，首次启动时会自动克隆并编译
+Elpaca 本身。
+
+#+begin_src emacs-lisp
+(defvar elpaca-installer-version 0.12)
+(defvar elpaca-directory (expand-file-name "elpaca/" user-emacs-directory))
+(defvar elpaca-builds-directory (expand-file-name "builds/" elpaca-directory))
+(defvar elpaca-sources-directory (expand-file-name "sources/" elpaca-directory))
+(defvar elpaca-order '(elpaca :repo "https://github.com/progfolio/elpaca.git"
+                              :ref nil :depth 1 :inherit ignore
+                              :files (:defaults "elpaca-test.el" (:exclude "extensions"))
+                              :build (:not elpaca-activate)))
+(let* ((repo  (expand-file-name "elpaca/" elpaca-sources-directory))
+       (build (expand-file-name "elpaca/" elpaca-builds-directory))
+       (order (cdr elpaca-order))
+       (default-directory repo))
+  (add-to-list 'load-path (if (file-exists-p build) build repo))
+  (unless (file-exists-p repo)
+    (make-directory repo t)
+    (when (<= emacs-major-version 28) (require 'subr-x))
+    (condition-case-unless-debug err
+        (if-let* ((buffer (pop-to-buffer-same-window "*elpaca-bootstrap*"))
+                  ((zerop (apply #'call-process `("git" nil ,buffer t "clone"
+                                                  ,@(when-let* ((depth (plist-get order :depth)))
+                                                      (list (format "--depth=%d" depth) "--no-single-branch"))
+                                                  ,(plist-get order :repo) ,repo))))
+                  ((zerop (call-process "git" nil buffer t "checkout"
+                                        (or (plist-get order :ref) "--"))))
+                  (emacs (concat invocation-directory invocation-name))
+                  ((zerop (call-process emacs nil buffer nil "-Q" "-L" "." "--batch"
+                                        "--eval" "(byte-recompile-directory \".\" 0 'force)")))
+                  ((require 'elpaca))
+                  ((elpaca-generate-autoloads "elpaca" repo)))
+            (progn (message "%s" (buffer-string)) (kill-buffer buffer))
+          (error "%s" (with-current-buffer buffer (buffer-string))))
+      ((error) (warn "%s" err) (delete-directory repo 'recursive))))
+  (unless (require 'elpaca-autoloads nil t)
+    (require 'elpaca)
+    (elpaca-generate-autoloads "elpaca" repo)
+    (let ((load-source-file-function nil)) (load "./elpaca-autoloads"))))
+(add-hook 'after-init-hook #'elpaca-process-queues)
+(elpaca `(,@elpaca-order))
+#+end_src
+
+** use-package 集成
+
+让 =use-package= 默认使用 =:ensure t=，并启用 Elpaca 作为 use-package 的后端。
+
+#+begin_src emacs-lisp
+(setq use-package-always-ensure t)
+
+(elpaca elpaca-use-package
+  (elpaca-use-package-mode)
+  (setq elpaca-use-package-by-default t))
+#+end_src
+
+* Emacs 本体配置
+** 编辑行为
+
+基本的编辑器行为设置：关闭自动保存/备份/锁文件以避免产生杂乱文件；
+启用自动刷新、括号自动配对、选中即替换等现代编辑器习惯。
+
+#+begin_src emacs-lisp
+;; 当外部程序修改了文件时，自动刷新 buffer
+(global-auto-revert-mode 1)
+
+;; 关闭自动保存 (#file#)、备份文件 (file~) 和锁文件 (.#file)
+(setq auto-save-default nil)
+(setq make-backup-files nil)
+(setq create-lockfiles nil)
+
+;; 用 y/n 代替 yes/no 确认
+(fset 'yes-or-no-p 'y-or-n-p)
+
+;; 启用自动括号配对（使用保守策略，避免在不合适的地方插入配对符号）
+(setq electric-pair-inhibit-predicate 'electric-pair-conservative-inhibit)
+(electric-pair-mode 1)
+
+;; 记住最近打开的文件
+(recentf-mode 1)
+;; 保存 minibuffer 历史（M-x 命令历史、搜索历史等）
+(savehist-mode 1)
+;; 选中文本后直接输入即替换选中内容
+(delete-selection-mode 1)
+
+;; TAB 键优先缩进，若已缩进则触发补全
+(setq tab-always-indent 'complete)
+;; 关闭 text-mode 下的 ispell 补全（可用 cape-dict 替代）
+(setq text-mode-ispell-word-completion nil)
+;; 在 M-x 中隐藏当前 mode 不适用的命令
+(setq read-extended-command-predicate #'command-completion-default-include-p)
+#+end_src
+
+** Tree-sitter
+
+Tree-sitter 提供高效精确的语法解析，用于语法高亮、结构编辑等。
+需要预先克隆语法模块仓库到指定目录。
+
+#+begin_src emacs-lisp
+;; git clone https://github.com/casouri/tree-sitter-module ~/Repos/tree-sitter-module
+(setq treesit-extra-load-path '("~/Repos/tree-sitter-module/dist/"))
+#+end_src
+
+* 快捷键绑定
+
+使用 =C-c= 前缀按功能分组：
+- =C-c p= — 项目 (project.el)
+- =C-c v= — 版本控制 (vc)
+- =C-c w= — 窗口管理 (windmove)
+- =C-c b= — Buffer 操作
+- =C-c t= — Org 待办事项
+
+#+begin_src emacs-lisp
+;; ── 项目管理 ──
+(global-set-key (kbd "C-c p p") 'project-switch-project)
+(global-set-key (kbd "C-c p f") 'project-find-file)
+(global-set-key (kbd "C-c p c") 'project-compile)
+(global-set-key (kbd "C-c p s") 'project-search)
+
+;; ── 版本控制 ──
+(global-set-key (kbd "C-c v v") 'vc-next-action)
+(global-set-key (kbd "C-c v c") 'vc-dir)
+(global-set-key (kbd "C-c v d") 'vc-diff)
+
+;; ── 窗口管理 (WASD 风格方向 + 数字分屏) ──
+(global-set-key (kbd "C-c w w") 'windmove-up)
+(global-set-key (kbd "C-c w a") 'windmove-left)
+(global-set-key (kbd "C-c w s") 'windmove-down)
+(global-set-key (kbd "C-c w d") 'windmove-right)
+(global-set-key (kbd "C-c w q") 'delete-window)
+(global-set-key (kbd "C-c w 1") 'delete-other-windows)
+(global-set-key (kbd "C-c w 2") 'split-window-below)
+(global-set-key (kbd "C-c w 3") 'split-window-right)
+
+;; ── Buffer 操作 ──
+(global-set-key (kbd "C-c b b") 'ido-switch-buffer)
+(global-set-key (kbd "C-c b k") 'ido-kill-buffer)
+
+;; ── Org 待办 ──
+(global-set-key (kbd "C-c t t") 'org-agenda-show-all-todo)
+#+end_src
+
+* 补全框架
+** Fido (内置迷你补全)
+
+Fido 是 Emacs 内置的类 Ido 补全框架。这里启用了垂直显示模式，
+并定义了一个快速打开最近文件的命令。
+
+#+begin_src emacs-lisp
+(if (fboundp 'fido-mode)
+    (progn
+      (fido-mode 1)
+      (when (fboundp 'fido-vertical-mode)
+        (fido-vertical-mode 1))
+
+      (defun fido-recentf-open ()
+        "使用 completing-read 打开最近访问的文件。"
+        (interactive)
+        (if (find-file (completing-read "Find recent file: " recentf-list))
+            (message "Opening file...")
+          (message "Aborting")))
+      (global-set-key (kbd "C-c r") 'fido-recentf-open)))
+#+end_src
+
+** Corfu (弹出式补全)
+
+Corfu 在光标处显示补全候选弹窗，轻量且快速，替代 company-mode。
+
+#+begin_src emacs-lisp
+(use-package corfu
+  :init
+  (global-corfu-mode))
+#+end_src
+
+** Kind-icon (补全图标)
+
+为 Corfu 补全候选项添加类型图标（函数、变量、关键字等），提高可读性。
+
+#+begin_src emacs-lisp
+(use-package kind-icon
+  :after corfu
+  :config
+  (add-to-list 'corfu-margin-formatters #'kind-icon-margin-formatter))
+#+end_src
+
+** Cape (补全后端扩展)
+
+Cape 提供额外的 =completion-at-point= 后端函数，如 dabbrev（动态缩写）、
+文件路径补全、Elisp 代码块补全等，可与 Corfu 配合使用。
+
+#+begin_src emacs-lisp
+(use-package cape
+  :init
+  (add-hook 'completion-at-point-functions #'cape-dabbrev)
+  (add-hook 'completion-at-point-functions #'cape-file)
+  (add-hook 'completion-at-point-functions #'cape-elisp-block))
+#+end_src
+
+* 界面与外观
+** 基础界面
+
+#+begin_src emacs-lisp
+;; 像素级平滑滚动（Emacs 29+）
+(pixel-scroll-precision-mode 1)
+;; 高亮当前行
+(global-hl-line-mode 1)
+#+end_src
+
+** 主题 (ef-themes)
+
+ef-themes 是 Protesilaos Stavrou 制作的一组高对比度、可访问性优先的主题集合。
+这里使用深色主题 =ef-elea-dark=。
+
+#+begin_src emacs-lisp
+(use-package ef-themes
+  :config (load-theme 'ef-elea-dark t))
+#+end_src
+
+** Org-modern (Org 美化)
+
+Org-modern 让 Org-mode 拥有更现代化的视觉效果：美化标题标记、列表符号、
+标签、时间戳等，同时调整边框和分隔线的样式。
+
+#+begin_src emacs-lisp
+(use-package org-modern
+  :config
+  ;; 添加窗口边框和分隔线
+  (modify-all-frames-parameters
+   '((right-divider-width . 8)
+     (internal-border-width . 8)))
+  (dolist (face '(window-divider
+                  window-divider-first-pixel
+                  window-divider-last-pixel))
+    (face-spec-reset-face face)
+    (set-face-foreground face (face-attribute 'default :background)))
+  (set-face-background 'fringe (face-attribute 'default :background))
+
+  ;; 设置中文字体（仓耳今楷）
+  (set-fontset-font t 'han "TsangerJinKai01 W04")
+
+  (setq
+   ;; ── Org 编辑行为 ──
+   org-auto-align-tags nil           ; 不自动对齐标签
+   org-tags-column 0                 ; 标签紧跟标题
+   org-catch-invisible-edits 'show-and-error ; 防止意外编辑折叠内容
+   org-special-ctrl-a/e t            ; C-a/C-e 智能跳到标题文本开头/结尾
+   org-insert-heading-respect-content t ; 新标题插入到内容之后
+
+   ;; ── Org 显示 ──
+   org-hide-emphasis-markers t       ; 隐藏 *粗体* /斜体/ 等标记符号
+   org-pretty-entities t             ; 将 \alpha 等显示为 Unicode 符号
+
+   ;; ── Agenda 样式 ──
+   org-agenda-tags-column 0
+   org-agenda-block-separator ?─
+   org-agenda-time-grid
+   '((daily today require-timed)
+     (800 1000 1200 1400 1600 1800 2000)
+     " ┄┄┄┄┄ " "┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄")
+   org-agenda-current-time-string
+   "◀── now ─────────────────────────────────────────────────")
+
+  ;; 折叠指示符
+  (setq org-ellipsis "…")
+  (set-face-attribute 'org-ellipsis nil :inherit 'default :box nil)
+
+  (global-org-modern-mode))
+#+end_src
+
+* 模态编辑 (Meow)
+
+Meow 是一个轻量的模态编辑框架，类似 Vim 但更贴合 Emacs 哲学。
+使用 QWERTY 布局，hjkl 移动，支持选择优先 (selection-first) 的编辑模式。
+
+#+begin_src emacs-lisp
+(use-package meow
+  :config
+  (defun meow-setup ()
+    (setq meow-cheatsheet-layout meow-cheatsheet-layout-qwerty)
+
+    ;; ── Motion state: 基本上下移动 ──
+    (meow-motion-overwrite-define-key
+     '("j" . meow-next)
+     '("k" . meow-prev)
+     '("<escape>" . ignore))
+
+    ;; ── Leader key (SPC): 快捷命令入口 ──
+    (meow-leader-define-key
+     '("j" . "H-j")
+     '("k" . "H-k")
+     '("1" . meow-digit-argument)
+     '("2" . meow-digit-argument)
+     '("3" . meow-digit-argument)
+     '("4" . meow-digit-argument)
+     '("5" . meow-digit-argument)
+     '("6" . meow-digit-argument)
+     '("7" . meow-digit-argument)
+     '("8" . meow-digit-argument)
+     '("9" . meow-digit-argument)
+     '("0" . meow-digit-argument)
+     '("/" . meow-keypad-describe-key)
+     '("?" . meow-cheatsheet))
+
+    ;; ── Normal state: 主要编辑键位 ──
+    (meow-normal-define-key
+     '("0" . meow-expand-0)
+     '("9" . meow-expand-9)
+     '("8" . meow-expand-8)
+     '("7" . meow-expand-7)
+     '("6" . meow-expand-6)
+     '("5" . meow-expand-5)
+     '("4" . meow-expand-4)
+     '("3" . meow-expand-3)
+     '("2" . meow-expand-2)
+     '("1" . meow-expand-1)
+     '("-" . negative-argument)
+     '(";" . meow-reverse)
+     '("," . meow-inner-of-thing)
+     '("." . meow-bounds-of-thing)
+     '("[" . meow-beginning-of-thing)
+     '("]" . meow-end-of-thing)
+     '("a" . meow-append)
+     '("A" . meow-open-below)
+     '("b" . meow-back-word)
+     '("B" . meow-back-symbol)
+     '("c" . meow-change)
+     '("d" . meow-delete)
+     '("D" . meow-backward-delete)
+     '("e" . meow-next-word)
+     '("E" . meow-next-symbol)
+     '("f" . meow-find)
+     '("g" . meow-cancel-selection)
+     '("G" . meow-grab)
+     '("h" . meow-left)
+     '("H" . meow-left-expand)
+     '("i" . meow-insert)
+     '("I" . meow-open-above)
+     '("j" . meow-next)
+     '("J" . meow-next-expand)
+     '("k" . meow-prev)
+     '("K" . meow-prev-expand)
+     '("l" . meow-right)
+     '("L" . meow-right-expand)
+     '("m" . meow-join)
+     '("n" . meow-search)
+     '("o" . meow-block)
+     '("O" . meow-to-block)
+     '("p" . meow-yank)
+     '("q" . meow-quit)
+     '("Q" . meow-goto-line)
+     '("r" . meow-replace)
+     '("R" . meow-swap-grab)
+     '("s" . meow-kill)
+     '("t" . meow-till)
+     '("u" . meow-undo)
+     '("U" . meow-undo-in-selection)
+     '("v" . meow-visit)
+     '("w" . meow-mark-word)
+     '("W" . meow-mark-symbol)
+     '("x" . meow-line)
+     '("X" . meow-goto-line)
+     '("y" . meow-save)
+     '("Y" . meow-sync-grab)
+     '("z" . meow-pop-selection)
+     '("'" . repeat)
+     '("<escape>" . ignore)))
+
+  (meow-setup)
+  (meow-global-mode 1))
+#+end_src
+
+* 编程语言支持
+
+各语言的 major-mode，按需加载。
+
+#+begin_src emacs-lisp
+(use-package nix-mode
+  :mode "\\.nix\\'")
+
+(use-package auctex
+  :mode "\\.tex\\'")
+
+(use-package lua-mode)
+(use-package kdl-mode)
+(use-package rasi-mode)
+(use-package typst-ts-mode)
+#+end_src
+
+* 笔记管理 (Denote)
+
+Denote 是一个简洁的笔记系统，基于文件名约定（时间戳 + 标题 + 关键词）
+来组织笔记，不依赖数据库，兼容任何文本格式。
+
+#+begin_src emacs-lisp
+(use-package denote
+  :ensure t
+  :hook
+  ((text-mode . denote-fontify-links-mode)
+   (dired-mode . denote-dired-mode))
+  :bind
+  (;; ── 笔记操作 (C-c n) ──
+   :map global-map
+   ("C-c n n" . denote)                ; 新建笔记
+   ("C-c n d" . denote-dired)          ; 在 Dired 中浏览笔记目录
+   ("C-c n g" . denote-grep)           ; 全文搜索笔记
+   ("C-c n l" . denote-link)           ; 插入到其他笔记的链接
+   ("C-c n L" . denote-add-links)      ; 批量添加链接
+   ("C-c n b" . denote-backlinks)      ; 查看反向链接
+   ("C-c n q c" . denote-query-contents-link)
+   ("C-c n q f" . denote-query-filenames-link)
+   ("C-c n r" . denote-rename-file)
+   ("C-c n R" . denote-rename-file-using-front-matter)
+   ;; ── Dired 中的批量操作 ──
+   :map dired-mode-map
+   ("C-c C-d C-i" . denote-dired-link-marked-notes)
+   ("C-c C-d C-r" . denote-dired-rename-files)
+   ("C-c C-d C-k" . denote-dired-rename-marked-files-with-keywords)
+   ("C-c C-d C-R" . denote-dired-rename-marked-files-using-front-matter))
+
+  :config
+  (setq denote-directory (expand-file-name "~/Documents/notes/"))
+  (setq denote-save-buffers nil)
+  (setq denote-known-keywords '("network"))
+  (setq denote-infer-keywords t)
+  (setq denote-sort-keywords t)
+  (setq denote-prompts '(title keywords))
+  (setq denote-excluded-directories-regexp nil)
+  (setq denote-keywords-to-not-infer-regexp nil)
+  (setq denote-rename-confirmations '(rewrite-front-matter modify-file-name))
+  (setq denote-date-prompt-use-org-read-date t)
+  (denote-rename-buffer-mode 1))
+#+end_src
+
+* 博客 (org-static-blog)
+
+使用 org-static-blog 将 Org 文件发布为静态博客。
+
+#+begin_src emacs-lisp
+(use-package org-static-blog
+  :config
+  (setq org-static-blog-publish-title "with keke;")
+  (setq org-static-blog-publish-url "")
+  (setq org-static-blog-publish-directory "~/Repos/blog/")
+  (setq org-static-blog-posts-directory "~/Repos/blog/posts/")
+  (setq org-static-blog-drafts-directory "~/Repos/blog/drafts/")
+  (setq org-static-blog-enable-tags t)
+  (setq org-static-blog-use-preview t)
+  (setq org-export-with-toc t)
+  (setq org-export-with-section-numbers nil)
+
+  ;; HTML <head> 中的 meta 信息和样式表
+  (setq org-static-blog-page-header
+	"
+          <meta name=\"author\" content=\"k\">
+          <meta name=\"referrer\" content=\"no-referrer\">
+          <meta name=\"viewport\" content=\"initial-scale=1,width=device-width,minimum-scale=1\">
+          <link href= \"static/style.css\" rel=\"stylesheet\" type=\"text/css\" />
+          <link rel=\"icon\" href=\"static/favicon.ico\">
+")
+
+  ;; 页面顶部导航栏
+  (setq org-static-blog-page-preamble
+	"
+          <div class=\"header\">
+              <a href=\"index.html\">HOMEPAGE 🏠 /</a>
+              <a href=\"archive.html\">ALL POSTS 📄 /</a>
+              <a href=\"tags.html\">ALL POSTS BY TAGS 🏷 /</a>
+              <a href=\"2024-07-30-about.html\">ABOUT 👩‍✈️</a>
+          </div>
+")
+
+  ;; 页脚
+  (setq org-static-blog-page-postamble
+	"<center>keke @ 2024-2025</center>")
+
+  ;; 首页标题
+  (setq org-static-blog-index-front-matter
+	"<h1>with keke;</h1>\n"))
+#+end_src

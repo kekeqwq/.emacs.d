@@ -8,3 +8,4 @@ eln-cache/
 projects
 eshell/
 .cache/
+init.el
