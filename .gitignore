@@ -9,3 +9,4 @@ projects
 eshell/
 .cache/
 init.el
+transient/
