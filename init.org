@@ -224,8 +224,8 @@ ef-themes 是 Protesilaos Stavrou 制作的一组高对比度、可访问性优�
 这里使用深色主题 =ef-elea-dark=。
 
 #+begin_src emacs-lisp
-(use-package ef-themes
-  :config (load-theme 'ef-elea-dark t))
+(use-package catppuccin-theme
+  :config (load-theme 'catppuccin t))
 #+end_src
 
 ** Org-modern (Org 美化)
