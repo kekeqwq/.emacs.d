@@ -225,7 +225,17 @@ ef-themes 是 Protesilaos Stavrou 制作的一组高对比度、可访问性优�
 
 #+begin_src emacs-lisp
 (use-package catppuccin-theme
-  :config (load-theme 'catppuccin t))
+  :config
+  (defun my-load-catppuccin-theme (&optional frame)
+    (when (display-graphic-p frame)
+      (load-theme 'catppuccin t)))
+
+  ;; 当前就是 GUI Emacs
+  (when (display-graphic-p)
+    (my-load-catppuccin-theme))
+
+  ;; 之后新建 GUI frame
+  (add-hook 'after-make-frame-functions #'my-load-catppuccin-theme))
 #+end_src
 
 ** Org-modern (Org 美化)
