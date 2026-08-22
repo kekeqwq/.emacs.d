@@ -212,10 +212,11 @@ Cape 提供额外的 =completion-at-point= 后端函数，如 dabbrev（动态�
 ** 基础界面
 
 #+begin_src emacs-lisp
-;; 像素级平滑滚动（Emacs 29+）
-(pixel-scroll-precision-mode 1)
-;; 高亮当前行
-(global-hl-line-mode 1)
+  (when (display-graphic-p)
+    ;; 像素级平滑滚动（Emacs 29+）
+    (pixel-scroll-precision-mode 1)
+    ;; 高亮当前行
+    (global-hl-line-mode 1))
 #+end_src
 
 ** 主题 (ef-themes)
