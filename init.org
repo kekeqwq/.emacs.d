@@ -412,9 +412,10 @@ Meow 是一个轻量的模态编辑框架，类似 Vim 但更贴合 Emacs 哲学
 
 * 编程语言支持
 
-各语言的 major-mode，按需加载。Emacs 31 已内置 =lua-mode=，不再从 ELPA
-安装。=typst-ts-mode= 仍走第三方包，但 grammar 会由上面的
-=treesit-auto-install-grammar= 处理。
+Lua 用内置 =lua-ts-mode=（=treesit-enabled-modes=），不再装 =lua-mode=。
+
+=typst-ts-mode= 把 =define-compilation-mode= 写进了 autoloads，Elpaca 加载
+该文件时 =compile= 往往还没就绪。关掉它的 autoloads，打开 =.typ= 再加载。
 
 #+begin_src emacs-lisp
 (use-package nix-mode
@@ -423,12 +424,12 @@ Meow 是一个轻量的模态编辑框架，类似 Vim 但更贴合 Emacs 哲学
 (use-package auctex
   :mode "\\.tex\\'")
 
-(use-package lua-mode
-  :ensure nil)
-
 (use-package kdl-mode)
 (use-package rasi-mode)
-(use-package typst-ts-mode)
+
+(use-package typst-ts-mode
+  :ensure (:autoloads nil)
+  :mode "\\.typ\\'")
 #+end_src
 
 * 笔记管理 (Denote)

@@ -6,6 +6,9 @@
 (setq package-enable-at-startup nil)
 (setq inhibit-splash-screen t)
 
+;; typst-ts-mode autoloads call define-compilation-mode (macro in compile.el).
+(require 'compile)
+
 (setq default-frame-alist
       (append
        '((menu-bar-lines . 0)
