@@ -10,3 +10,6 @@ eshell/
 .cache/
 init.el
 transient/
+projects.eld
+recentf.eld
+tree-sitter/
