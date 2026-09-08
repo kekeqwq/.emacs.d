@@ -243,18 +243,27 @@ Cape 提供额外的 =completion-at-point= 后端函数，如 dabbrev（动态�
 ** 主题 (Catppuccin)
 
 #+begin_src emacs-lisp
-(use-package catppuccin-theme
-  :config
-  (defun my-load-catppuccin-theme (&optional frame)
-    (when (display-graphic-p frame)
-      (load-theme 'catppuccin t)))
+  (use-package batppuccin
+    :vc (:url "https://github.com/bbatsov/batppuccin-emacs"
+  	    :rev :newest))
 
-  ;; 当前就是 GUI Emacs
   (when (display-graphic-p)
-    (my-load-catppuccin-theme))
+    (pcase system-type
+      ('gnu/linux
+       (load-theme 'batppuccin-mocha t))
 
-  ;; 之后新建 GUI frame
-  (add-hook 'after-make-frame-functions #'my-load-catppuccin-theme))
+      ('windows-nt
+       (load-theme 'batppuccin-latte t))
+
+      ('darwin
+       (defun my/load-theme (appearance)
+         (mapc #'disable-theme custom-enabled-themes)
+         (pcase appearance
+           ('light (load-theme 'batppuccin-latte t))
+           ('dark (load-theme 'batppuccin-mocha t))))
+
+       (add-hook 'ns-system-appearance-change-functions
+                 #'my/load-theme))))
 #+end_src
 
 ** Org-modern (Org 美化)
@@ -433,21 +442,23 @@ Lua 用内置 =lua-ts-mode=（=treesit-enabled-modes=），不再装 =lua-mode=�
     :mode "\\.typ\\'")
 
   ;;; AI
-  (use-package eca
-    :vc (:url "https://github.com/editor-code-assistant/eca-emacs" :rev :newest))
+  ;; (use-package eca
+  ;;   :vc (:url "https://github.com/editor-code-assistant/eca-emacs" :rev :newest))
 
-  (when (eq system-type 'darwin)
-    ;; ghostel 若提前 require，容易把 compat 先加载掉。
+  (if (eq system-type 'windows-nt)
+      (use-package ghostel
+        :demand t)
     (use-package ghostel
       :ensure nil
-      :demand t)
-    (use-package ai-code
-      :ensure (:autoloads nil)
-      :after (transient ghostel)
-      :config
-      (ai-code-set-backend 'antigravity)
-      (global-set-key (kbd "C-c a") #'ai-code-menu)
-      (setq ai-code-backends-infra-terminal-backend 'ghostel)))
+      :demand t))
+
+  (use-package ai-code
+    :ensure (:autoloads nil)
+    :after (transient ghostel)
+    :config
+    (ai-code-set-backend 'antigravity)
+    (global-set-key (kbd "C-c a") #'ai-code-menu)
+    (setq ai-code-backends-infra-terminal-backend 'ghostel))
 #+end_src
 
 * 笔记管理 (Denote)
