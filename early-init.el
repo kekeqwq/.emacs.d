@@ -33,13 +33,20 @@
 
 ;; system-type 在 macOS 上是 darwin，没有 'macos。
 (when (eq system-type 'darwin)
-  (add-to-list 'default-frame-alist '(alpha . 80))
+  (dolist (entry '((undecorated-round . t)
+                   (alpha . 80)))
+    (add-to-list 'default-frame-alist entry))
+
   (condition-case err
-      (let ((path (with-temp-buffer
-                    (insert-file-contents-literally "~/.path")
-                    (buffer-string))))
+      (let ((path
+             (with-temp-buffer
+               (insert-file-contents-literally (expand-file-name "~/.path"))
+               (string-trim (buffer-string)))))
         (setenv "PATH" path)
-        (setq exec-path (append (parse-colon-path path) (list exec-directory))))
-    (error (warn "%s" (error-message-string err)))))
+        (setq exec-path
+              (append (parse-colon-path path)
+                      (list exec-directory))))
+    (error
+     (warn "%s" (error-message-string err)))))
 
 ;;; early-init.el ends here
