@@ -245,25 +245,30 @@ Cape 提供额外的 =completion-at-point= 后端函数，如 dabbrev（动态�
 #+begin_src emacs-lisp
   (use-package batppuccin
     :vc (:url "https://github.com/bbatsov/batppuccin-emacs"
-  	    :rev :newest))
+	    :rev :newest)
+    :demand t
+    :ensure (:wait t)
+    :config
+    ;; elpaca 异步安装；必须等包激活并把主题目录加入
+    ;; custom-theme-load-path 后再 load-theme，否则 Windows 上
+    ;; 会报 Unable to find theme file for batppuccin-latte。
+    (when (display-graphic-p)
+      (pcase system-type
+	('gnu/linux
+	 (load-theme 'batppuccin-mocha t))
 
-  (when (display-graphic-p)
-    (pcase system-type
-      ('gnu/linux
-       (load-theme 'batppuccin-mocha t))
+	('windows-nt
+	 (load-theme 'batppuccin-latte t))
 
-      ('windows-nt
-       (load-theme 'batppuccin-latte t))
+	('darwin
+	 (defun my/load-theme (appearance)
+	   (mapc #'disable-theme custom-enabled-themes)
+	   (pcase appearance
+	     ('light (load-theme 'batppuccin-latte t))
+	     ('dark (load-theme 'batppuccin-mocha t))))
 
-      ('darwin
-       (defun my/load-theme (appearance)
-         (mapc #'disable-theme custom-enabled-themes)
-         (pcase appearance
-           ('light (load-theme 'batppuccin-latte t))
-           ('dark (load-theme 'batppuccin-mocha t))))
-
-       (add-hook 'ns-system-appearance-change-functions
-                 #'my/load-theme))))
+	 (add-hook 'ns-system-appearance-change-functions
+		   #'my/load-theme)))))
 #+end_src
 
 ** Org-modern (Org 美化)
