@@ -17,19 +17,16 @@
          (alpha-background . 80))
        default-frame-alist))
 
-(defvar font-list
-  (cond
-   ((eq system-type 'darwin)
-    '(("MonoLisa Nasy" . 15) ("Monaco" . 13) ("Menlo" . 13)))
-   ((eq system-type 'windows-nt)
-    '(("Iosevka Term Curly" . 14) ("Consolas" . 12) ("Cascadia Mono" . 11)))
-   (t
-    '(("MonoLisa Nasy" . 11) ("SF Mono" . 11) ("Consolas" . 12))))
-  "Fonts to try.  First available entry is used for the default face.")
-
-(add-to-list 'default-frame-alist
-             (cons 'font (format "%s-%d" (caar font-list) (cdar font-list))))
-(set-fontset-font t 'unicode "Iosevka Term Curly")
+(when (display-graphic-p)
+  (set-face-attribute
+   'default nil
+   :family "MonoLisa Nasy"
+   :height
+   (pcase system-type
+     ('darwin 150)
+     ('windows-nt 140)
+     ('gnu/linux 130)
+     (_ 130))))
 
 ;; system-type 在 macOS 上是 darwin，没有 'macos。
 (when (eq system-type 'darwin)
