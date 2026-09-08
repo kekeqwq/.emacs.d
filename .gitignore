@@ -16,3 +16,4 @@ tree-sitter/
 eca/
 ai-code-backends-history.el
 tramp
+.agents/

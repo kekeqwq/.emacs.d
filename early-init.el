@@ -42,6 +42,8 @@
 
 ;; Windows emacs -nw：w32console 会设成 OEM（常为 cp936），
 ;; ▶ / … 等编不进去就会显示成 \u25B6。TTY 改为 UTF-8。
+;; 只取消 default 底色：16 色下 bg_normal 越界则不发背景 SGR（透出终端），
+;; 前景仍用 0–15，避免上次 fg 也越界导致光标错位。
 (when (eq system-type 'windows-nt)
   (defun my/windows-tty-utf-8 ()
     (when (fboundp 'w32-set-console-output-codepage)
@@ -51,7 +53,18 @@
     (setq locale-coding-system 'utf-8)
     (set-terminal-coding-system 'utf-8)
     (set-keyboard-coding-system 'utf-8))
-  (add-hook 'tty-setup-hook #'my/windows-tty-utf-8))
+  (defun my/windows-tty-skip-default-bg ()
+    (set-frame-parameter nil 'tty-color-mode 16)
+    (when (fboundp 'set-screen-color)
+      (let* ((pair (and (fboundp 'get-screen-color) (get-screen-color t)))
+             (fg (car pair)))
+        (unless (and (integerp fg) (>= fg 0) (<= fg 15))
+          (setq fg 7))
+        (set-screen-color fg 16 t)))
+    (set-face-background 'default "unspecified-bg")
+    (set-face-background 'fringe "unspecified-bg"))
+  (add-hook 'tty-setup-hook #'my/windows-tty-utf-8)
+  (add-hook 'tty-setup-hook #'my/windows-tty-skip-default-bg))
 
 ;; system-type 在 macOS 上是 darwin，没有 'macos。
 (when (eq system-type 'darwin)
