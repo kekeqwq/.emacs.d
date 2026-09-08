@@ -290,9 +290,6 @@ Org-modern 让 Org-mode 拥有更现代化的视觉效果：美化标题标记�
     (set-face-foreground face (face-attribute 'default :background)))
   (set-face-background 'fringe (face-attribute 'default :background))
 
-  ;; 设置中文字体（仓耳今楷）
-  (set-fontset-font t 'han "TsangerJinKai01 W04")
-
   (setq
    ;; ── Org 编辑行为 ──
    org-auto-align-tags nil           ; 不自动对齐标签
@@ -461,6 +458,32 @@ Lua 用内置 =lua-ts-mode=（=treesit-enabled-modes=），不再装 =lua-mode=�
     :ensure (:autoloads nil)
     :after (transient ghostel)
     :config
+    ;; ai-code MCP 只认 openssl / /dev/urandom，Windows 上都没有。
+    ;; 仅在 Windows 上用 PowerShell 的 CSPRNG 兜底，其它系统走原逻辑。
+    (when (eq system-type 'windows-nt)
+      (defun my/windows-crypto-random-hex ()
+        "Return 32 CSPRNG bytes as 64 lowercase hex digits (Windows)."
+        (let ((ps (or (executable-find "pwsh")
+                      (executable-find "powershell"))))
+          (unless ps
+            (error "No PowerShell found for MCP authentication entropy"))
+          (with-temp-buffer
+            (unless (zerop
+                     (call-process
+                      ps nil t nil
+                      "-NoProfile" "-NonInteractive" "-Command"
+                      "$b = New-Object byte[] 32; [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b); [BitConverter]::ToString($b).Replace('-','').ToLower()"))
+              (error "PowerShell could not generate an MCP secret"))
+            (let ((secret (string-trim (buffer-string))))
+              (unless (string-match-p "\\`[[:xdigit:]]\\{64\\}\\'" secret)
+                (error "PowerShell returned an invalid MCP secret"))
+              secret))))
+      (defun my/ai-code-mcp--random-secret-windows (orig &rest args)
+        (condition-case _
+            (apply orig args)
+          (error (my/windows-crypto-random-hex))))
+      (advice-add 'ai-code-mcp--random-secret :around
+                  #'my/ai-code-mcp--random-secret-windows))
     (ai-code-set-backend 'antigravity)
     (global-set-key (kbd "C-c a") #'ai-code-menu)
     (setq ai-code-backends-infra-terminal-backend 'ghostel))

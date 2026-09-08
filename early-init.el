@@ -27,11 +27,35 @@
     (setf (alist-get 'font (symbol-value alist))
           (format "%s-%d" font size))))
 
+;; 英文仍用 MonoLisa Nasy；仅 Windows GUI 把汉字落到微软雅黑。
+(when (eq system-type 'windows-nt)
+  (defun my/windows-cjk-font (&optional frame)
+    (let ((frame (or frame (selected-frame))))
+      (when (display-graphic-p frame)
+        (dolist (charset '(han cjk-misc))
+          (set-fontset-font t charset "Microsoft YaHei" frame)))))
+  (add-hook 'after-make-frame-functions #'my/windows-cjk-font)
+  (add-hook 'window-setup-hook #'my/windows-cjk-font))
+
+(when (memq system-type '(darwin windows-nt))
+  (add-to-list 'default-frame-alist '(alpha . 80)))
+
+;; Windows emacs -nw：w32console 会设成 OEM（常为 cp936），
+;; ▶ / … 等编不进去就会显示成 \u25B6。TTY 改为 UTF-8。
+(when (eq system-type 'windows-nt)
+  (defun my/windows-tty-utf-8 ()
+    (when (fboundp 'w32-set-console-output-codepage)
+      (w32-set-console-output-codepage 65001))
+    (when (fboundp 'w32-set-console-codepage)
+      (w32-set-console-codepage 65001))
+    (setq locale-coding-system 'utf-8)
+    (set-terminal-coding-system 'utf-8)
+    (set-keyboard-coding-system 'utf-8))
+  (add-hook 'tty-setup-hook #'my/windows-tty-utf-8))
+
 ;; system-type 在 macOS 上是 darwin，没有 'macos。
 (when (eq system-type 'darwin)
-  (dolist (entry '((undecorated-round . t)
-                   (alpha . 80)))
-    (add-to-list 'default-frame-alist entry))
+  (add-to-list 'default-frame-alist '(undecorated-round . t))
 
   (condition-case err
       (let ((path
