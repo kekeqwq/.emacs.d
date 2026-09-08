@@ -4,14 +4,8 @@
 #+PROPERTY: header-args:emacs-lisp :tangle init.el :results silent
 #+STARTUP: overview
 
-使用方法：在 Emacs 中打开本文件，执行 =M-x org-babel-tangle= (=C-c C-v t=)
-即可生成 =init.el= 文件。本配置只面向 Emacs 31，不保留旧版本兼容。
-
 #+begin_src emacs-lisp
 ;;; init.el --- tangled from init.org -*- lexical-binding: t; -*-
-
-(when (< emacs-major-version 31)
-  (error "This configuration requires Emacs 31 or newer"))
 #+end_src
 
 * 包管理器 (Elpaca)
@@ -418,18 +412,21 @@ Lua 用内置 =lua-ts-mode=（=treesit-enabled-modes=），不再装 =lua-mode=�
 该文件时 =compile= 往往还没就绪。关掉它的 autoloads，打开 =.typ= 再加载。
 
 #+begin_src emacs-lisp
-(use-package nix-mode
-  :mode "\\.nix\\'")
+  (use-package nix-mode
+    :mode "\\.nix\\'")
 
-(use-package auctex
-  :mode "\\.tex\\'")
+  (use-package auctex
+    :mode "\\.tex\\'")
 
-(use-package kdl-mode)
-(use-package rasi-mode)
+  (use-package kdl-mode)
+  (use-package rasi-mode)
 
-(use-package typst-ts-mode
-  :ensure (:autoloads nil)
-  :mode "\\.typ\\'")
+  (use-package typst-ts-mode
+    :ensure (:autoloads nil)
+    :mode "\\.typ\\'")
+
+  (use-package eca
+    :vc (:url "https://github.com/editor-code-assistant/eca-emacs" :rev :newest))
 #+end_src
 
 * 笔记管理 (Denote)
