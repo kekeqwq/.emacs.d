@@ -17,16 +17,15 @@
          (alpha-background . 80))
        default-frame-alist))
 
-(when (display-graphic-p)
-  (set-face-attribute
-   'default nil
-   :family "MonoLisa Nasy"
-   :height
-   (pcase system-type
-     ('darwin 150)
-     ('windows-nt 140)
-     ('gnu/linux 130)
-     (_ 130))))
+(let ((size (pcase system-type
+              ('darwin 15)
+              ('windows-nt 14)
+              ('gnu/linux 13)
+              (_ 13)))
+      (font "MonoLisa Nasy"))
+  (dolist (alist '(default-frame-alist initial-frame-alist))
+    (setf (alist-get 'font (symbol-value alist))
+          (format "%s-%d" font size))))
 
 ;; system-type 在 macOS 上是 darwin，没有 'macos。
 (when (eq system-type 'darwin)
