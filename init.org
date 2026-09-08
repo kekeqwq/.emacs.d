@@ -72,6 +72,12 @@ Elpaca 本身。
   (setq elpaca-use-package-by-default t))
 
 (elpaca-wait)
+
+;; compat / transient 会被 ai-code 一类包当依赖。
+;; 先激活，避免 compat 被 ghostel 提前加载，也避免
+;; ai-code autoloads 调用未定义的 transient-define-prefix。
+(use-package compat :ensure (:wait t) :demand t)
+(use-package transient :ensure (:wait t) :demand t)
 #+end_src
 
 * Emacs 本体配置
@@ -429,9 +435,15 @@ Lua 用内置 =lua-ts-mode=（=treesit-enabled-modes=），不再装 =lua-mode=�
   ;;; AI
   (use-package eca
     :vc (:url "https://github.com/editor-code-assistant/eca-emacs" :rev :newest))
+
   (when (eq system-type 'darwin)
-    (require 'ghostel)
+    ;; ghostel 若提前 require，容易把 compat 先加载掉。
+    (use-package ghostel
+      :ensure nil
+      :demand t)
     (use-package ai-code
+      :ensure (:autoloads nil)
+      :after (transient ghostel)
       :config
       (ai-code-set-backend 'antigravity)
       (global-set-key (kbd "C-c a") #'ai-code-menu)
