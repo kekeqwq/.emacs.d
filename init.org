@@ -200,9 +200,12 @@ Fido 是 Emacs 内置的类 Ido 补全框架。这里启用了垂直显示模式
 Corfu 在光标处显示补全候选弹窗，轻量且快速，替代 company-mode。
 
 #+begin_src emacs-lisp
-(use-package corfu
-  :init
-  (global-corfu-mode))
+  (use-package corfu
+    :custom
+    (corfu-auto t)
+    (corfu-cycle t)
+    :init
+    (global-corfu-mode))
 #+end_src
 
 ** Kind-icon (补全图标)
@@ -443,34 +446,25 @@ Lua 用内置 =lua-ts-mode=（=treesit-enabled-modes=），不再装 =lua-mode=�
     :ensure (:autoloads nil)
     :mode "\\.typ\\'")
 
-  ;;; Windows development
+  ;;;Windows
   (when (eq system-type 'windows-nt)
     ;; PowerShell
     (use-package powershell
       :mode (("\\.ps1\\'" . powershell-mode)
              ("\\.psm1\\'" . powershell-mode)
              ("\\.psd1\\'" . powershell-mode))
-      :commands powershell
       :config
       (setq powershell-location-of-exe
             (or (executable-find "pwsh")
                 (executable-find "powershell"))))
 
-    ;; .NET / C#
-    ;; Emacs 31 自带 csharp-mode / csharp-ts-mode；Eglot 也已经知道
-    ;; csharp-ls 和 OmniSharp，因此这里只负责自动启用。
-    (defun my/windows-csharp-setup ()
-      "Configure C# buffers on Windows."
-      (setq-local compile-command "dotnet build")
-      (when (or (executable-find "csharp-ls")
-                (executable-find "omnisharp")
-                (executable-find "OmniSharp"))
-        (eglot-ensure)))
-
+    ;; C# / .NET
     (use-package eglot
       :ensure nil
-      :hook ((csharp-mode . my/windows-csharp-setup)
-             (csharp-ts-mode . my/windows-csharp-setup)))
+      :custom
+      (eglot-ignored-server-capabilities '(:semanticTokensProvider))
+      :hook ((csharp-mode . eglot-ensure)
+             (csharp-ts-mode . eglot-ensure)))
 
     ;; AutoHotkey
     (use-package ahk-mode
