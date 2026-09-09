@@ -443,6 +443,39 @@ Lua 用内置 =lua-ts-mode=（=treesit-enabled-modes=），不再装 =lua-mode=�
     :ensure (:autoloads nil)
     :mode "\\.typ\\'")
 
+  ;;; Windows development
+  (when (eq system-type 'windows-nt)
+    ;; PowerShell
+    (use-package powershell
+      :mode (("\\.ps1\\'" . powershell-mode)
+             ("\\.psm1\\'" . powershell-mode)
+             ("\\.psd1\\'" . powershell-mode))
+      :commands powershell
+      :config
+      (setq powershell-location-of-exe
+            (or (executable-find "pwsh")
+                (executable-find "powershell"))))
+
+    ;; .NET / C#
+    ;; Emacs 31 自带 csharp-mode / csharp-ts-mode；Eglot 也已经知道
+    ;; csharp-ls 和 OmniSharp，因此这里只负责自动启用。
+    (defun my/windows-csharp-setup ()
+      "Configure C# buffers on Windows."
+      (setq-local compile-command "dotnet build")
+      (when (or (executable-find "csharp-ls")
+                (executable-find "omnisharp")
+                (executable-find "OmniSharp"))
+        (eglot-ensure)))
+
+    (use-package eglot
+      :ensure nil
+      :hook ((csharp-mode . my/windows-csharp-setup)
+             (csharp-ts-mode . my/windows-csharp-setup)))
+
+    ;; AutoHotkey
+    (use-package ahk-mode
+      :mode "\\.ahk\\'"))
+
   ;;; AI
   ;; (use-package eca
   ;;   :vc (:url "https://github.com/editor-code-assistant/eca-emacs" :rev :newest))
