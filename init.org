@@ -213,10 +213,20 @@ Corfu 在光标处显示补全候选弹窗，轻量且快速，替代 company-mo
 为 Corfu 补全候选项添加类型图标（函数、变量、关键字等），提高可读性。
 
 #+begin_src emacs-lisp
-(use-package kind-icon
-  :after corfu
-  :config
-  (add-to-list 'corfu-margin-formatters #'kind-icon-margin-formatter))
+  (use-package kind-icon
+    :after corfu
+    :config
+    ;; Windows 下 SVG 图标会被渲染得过大，导致 Corfu 补全框
+    ;; 每一项高度异常。其它系统保持默认大小。
+    (when (eq system-type 'windows-nt)
+      (setq kind-icon-default-style
+            '(:padding 0
+  		     :stroke 0
+  		     :margin 0
+  		     :radius 0
+  		     :height 0.8
+  		     :scale 1.0)))
+    (add-to-list 'corfu-margin-formatters #'kind-icon-margin-formatter))
 #+end_src
 
 ** Cape (补全后端扩展)
@@ -465,6 +475,13 @@ Lua 用内置 =lua-ts-mode=（=treesit-enabled-modes=），不再装 =lua-mode=�
       (eglot-ignored-server-capabilities '(:semanticTokensProvider))
       :hook ((csharp-mode . eglot-ensure)
              (csharp-ts-mode . eglot-ensure)))
+    ;; C# TAB → indent + completion
+    (with-eval-after-load 'csharp-mode
+      (define-key csharp-mode-map (kbd "TAB") #'indent-for-tab-command)
+      (define-key csharp-mode-map (kbd "<tab>") #'indent-for-tab-command))
+
+    ;; .csproj → XML
+    (add-to-list 'auto-mode-alist '("\\.csproj\\'" . nxml-mode))  
 
     ;; AutoHotkey
     (use-package ahk-mode
