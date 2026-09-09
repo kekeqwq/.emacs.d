@@ -224,7 +224,7 @@ Corfu 在光标处显示补全候选弹窗，轻量且快速，替代 company-mo
   		     :stroke 0
   		     :margin 0
   		     :radius 0
-  		     :height 0.8
+  		     :height 0.3
   		     :scale 1.0)))
     (add-to-list 'corfu-margin-formatters #'kind-icon-margin-formatter))
 #+end_src
