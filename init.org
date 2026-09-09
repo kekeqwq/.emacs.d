@@ -458,6 +458,7 @@ Lua 用内置 =lua-ts-mode=（=treesit-enabled-modes=），不再装 =lua-mode=�
 
   ;;;Windows
   (when (eq system-type 'windows-nt)
+    (setenv "HOME" "C:/Users/keke")
     ;; PowerShell
     (use-package powershell
       :mode (("\\.ps1\\'" . powershell-mode)
