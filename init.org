@@ -204,6 +204,7 @@ Corfu 在光标处显示补全候选弹窗，轻量且快速，替代 company-mo
     :custom
     (corfu-auto t)
     (corfu-cycle t)
+    (global-corfu-minibuffer nil)
     :init
     (global-corfu-mode))
 #+end_src
