@@ -219,8 +219,11 @@ Corfu 在光标处显示补全候选弹窗，轻量且快速，替代 company-mo
     :config
     ;; --- 针对 Windows 的修复代码 ---
     (when (eq system-type 'windows-nt)
+      ;; svg-lib 的宽度计算公式为 (+ 2 padding)，当 height 为 0.3 时图标宽度约为 0.6 字符。
+      ;; padding 设为 -1.2 即可将 SVG 容器宽度收缩至 ~0.8 字符，消除图标左右多余的大量空白。
       (setq kind-icon-default-style
-            '(:padding -0.1 :stroke 0 :margin 0 :radius 0 :height 0.3 :scale 1.0)))
+            '(:padding -1.2 :stroke 0 :margin 0 :radius 0 :height 0.3 :scale 1.0))
+      (kind-icon-reset-cache))
     ;; ----------------------------
     (add-to-list 'corfu-margin-formatters #'kind-icon-margin-formatter))
 #+end_src
