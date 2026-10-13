@@ -451,7 +451,7 @@ Meow 普通模式下用 =SPC c c=，编辑模式下用 =C-c c c=；这些绑定�
 该文件时 =compile= 往往还没就绪。关掉它的 autoloads，打开 =.typ= 再加载。
 
 #+begin_src emacs-lisp
-  ;;; Base
+    ;;; Base
   (use-package nix-mode
     :mode "\\.nix\\'")
 
@@ -465,14 +465,14 @@ Meow 普通模式下用 =SPC c c=，编辑模式下用 =C-c c c=；这些绑定�
     :ensure (:autoloads nil)
     :mode "\\.typ\\'")
 
-  ;;; Python: built-in tree-sitter mode + Eglot; basedpyright comes from Nix.
+    ;;; Python: built-in tree-sitter mode + Eglot; basedpyright comes from Nix.
   (use-package python
     :ensure nil
     :custom
     (python-shell-interpreter (if (eq system-type 'windows-nt) "python" "python3"))
     :bind (:map python-mode-map
                 ("C-c c c" . my/python-run-ghostel)
-           :map python-ts-mode-map
+                :map python-ts-mode-map
                 ("C-c c c" . my/python-run-ghostel)))
 
   (use-package eglot
@@ -561,9 +561,9 @@ Meow 普通模式下用 =SPC c c=，编辑模式下用 =C-c c c=；这些绑定�
 
   (defun my/python-run-ghostel ()
     "Save and run the current Python file in a new Ghostel window on the right.
-Select the output window.  C-c stops the session and closes its window.
-Keep output after Python exits until explicitly closed.
-Honor `python-shell-virtualenv-root' and Python's process environment."
+  Select the output window.  C-c stops the session and closes its window.
+  Keep output after Python exits until explicitly closed.
+  Honor `python-shell-virtualenv-root' and Python's process environment."
     (interactive)
     (unless (and (derived-mode-p 'python-mode 'python-ts-mode)
                  buffer-file-name
@@ -576,32 +576,32 @@ Honor `python-shell-virtualenv-root' and Python's process environment."
     (let ((file (expand-file-name buffer-file-name))
           (default-directory (file-name-directory buffer-file-name)))
       (python-shell-with-environment
-        (let ((python (executable-find python-shell-interpreter)))
-          (unless python
-            (user-error "Python interpreter not found: %s" python-shell-interpreter))
-          (let ((window (split-window-right))
-                (output (generate-new-buffer
-                         (format "*Python: %s*" (file-name-nondirectory file)))))
-            (condition-case err
-                (progn
-                  (set-window-buffer window output)
-                  (select-window window)
-                  (let ((process (ghostel-exec output python (list "-u" file))))
-                    ;; ghostel-exec initializes the major mode, so set locals afterwards.
-                    (setq-local ghostel-kill-buffer-on-exit nil
-                                my/python-output-window window
-                                my/python-output-process process)
-                    (my/python-output-mode 1)
-                    (add-hook 'kill-buffer-hook
-                              #'my/python-output-delete-window nil t)
-                    (add-hook 'kill-buffer-hook
-                              #'my/python-output-kill-process nil t)))
-              ((error quit)
-               (when (buffer-live-p output) (kill-buffer output))
-               (when (window-live-p window) (delete-window window))
-               (signal (car err) (cdr err)))))))))
+       (let ((python (executable-find python-shell-interpreter)))
+         (unless python
+           (user-error "Python interpreter not found: %s" python-shell-interpreter))
+         (let ((window (split-window-right))
+               (output (generate-new-buffer
+                        (format "*Python: %s*" (file-name-nondirectory file)))))
+           (condition-case err
+               (progn
+                 (set-window-buffer window output)
+                 (select-window window)
+                 (let ((process (ghostel-exec output python (list "-u" file))))
+                   ;; ghostel-exec initializes the major mode, so set locals afterwards.
+                   (setq-local ghostel-kill-buffer-on-exit nil
+                               my/python-output-window window
+                               my/python-output-process process)
+                   (my/python-output-mode 1)
+                   (add-hook 'kill-buffer-hook
+                             #'my/python-output-delete-window nil t)
+                   (add-hook 'kill-buffer-hook
+                             #'my/python-output-kill-process nil t)))
+             ((error quit)
+              (when (buffer-live-p output) (kill-buffer output))
+              (when (window-live-p window) (delete-window window))
+              (signal (car err) (cdr err)))))))))
 
-  ;;;Windows
+    ;;;Windows
   (when (eq system-type 'windows-nt)
     (setenv "HOME" "C:/Users/keke")
     ;; PowerShell
@@ -633,7 +633,7 @@ Honor `python-shell-virtualenv-root' and Python's process environment."
     (use-package ahk-mode
       :mode "\\.ahk\\'"))
 
-  ;;; AI
+    ;;; AI
   ;; (use-package eca
   ;;   :vc (:url "https://github.com/editor-code-assistant/eca-emacs" :rev :newest))
 
@@ -644,39 +644,39 @@ Honor `python-shell-virtualenv-root' and Python's process environment."
       :ensure nil
       :demand t))
 
-  (use-package ai-code
-    :ensure (:autoloads nil)
-    :after (transient ghostel)
-    :config
-    ;; ai-code MCP 只认 openssl / /dev/urandom，Windows 上都没有。
-    ;; 仅在 Windows 上用 PowerShell 的 CSPRNG 兜底，其它系统走原逻辑。
-    (when (eq system-type 'windows-nt)
-      (defun my/windows-crypto-random-hex ()
-        "Return 32 CSPRNG bytes as 64 lowercase hex digits (Windows)."
-        (let ((ps (or (executable-find "pwsh")
-                      (executable-find "powershell"))))
-          (unless ps
-            (error "No PowerShell found for MCP authentication entropy"))
-          (with-temp-buffer
-            (unless (zerop
-                     (call-process
-                      ps nil t nil
-                      "-NoProfile" "-NonInteractive" "-Command"
-                      "$b = New-Object byte[] 32; [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b); [BitConverter]::ToString($b).Replace('-','').ToLower()"))
-              (error "PowerShell could not generate an MCP secret"))
-            (let ((secret (string-trim (buffer-string))))
-              (unless (string-match-p "\\`[[:xdigit:]]\\{64\\}\\'" secret)
-                (error "PowerShell returned an invalid MCP secret"))
-              secret))))
-      (defun my/ai-code-mcp--random-secret-windows (orig &rest args)
-        (condition-case _
-            (apply orig args)
-          (error (my/windows-crypto-random-hex))))
-      (advice-add 'ai-code-mcp--random-secret :around
-                  #'my/ai-code-mcp--random-secret-windows))
-    (ai-code-set-backend 'antigravity)
-    (global-set-key (kbd "C-c a") #'ai-code-menu)
-    (setq ai-code-backends-infra-terminal-backend 'ghostel))
+  ;; (use-package ai-code
+  ;;   :ensure (:autoloads nil)
+  ;;   :after (transient ghostel)
+  ;;   :config
+  ;;   ;; ai-code MCP 只认 openssl / /dev/urandom，Windows 上都没有。
+  ;;   ;; 仅在 Windows 上用 PowerShell 的 CSPRNG 兜底，其它系统走原逻辑。
+  ;;   (when (eq system-type 'windows-nt)
+  ;;     (defun my/windows-crypto-random-hex ()
+  ;;       "Return 32 CSPRNG bytes as 64 lowercase hex digits (Windows)."
+  ;;       (let ((ps (or (executable-find "pwsh")
+  ;;                     (executable-find "powershell"))))
+  ;;         (unless ps
+  ;;           (error "No PowerShell found for MCP authentication entropy"))
+  ;;         (with-temp-buffer
+  ;;           (unless (zerop
+  ;;                    (call-process
+  ;;                     ps nil t nil
+  ;;                     "-NoProfile" "-NonInteractive" "-Command"
+  ;;                     "$b = New-Object byte[] 32; [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b); [BitConverter]::ToString($b).Replace('-','').ToLower()"))
+  ;;             (error "PowerShell could not generate an MCP secret"))
+  ;;           (let ((secret (string-trim (buffer-string))))
+  ;;             (unless (string-match-p "\\`[[:xdigit:]]\\{64\\}\\'" secret)
+  ;;               (error "PowerShell returned an invalid MCP secret"))
+  ;;             secret))))
+  ;;     (defun my/ai-code-mcp--random-secret-windows (orig &rest args)
+  ;;       (condition-case _
+  ;;           (apply orig args)
+  ;;         (error (my/windows-crypto-random-hex))))
+  ;;     (advice-add 'ai-code-mcp--random-secret :around
+  ;;                 #'my/ai-code-mcp--random-secret-windows))
+  ;;   (ai-code-set-backend 'antigravity)
+  ;;   (global-set-key (kbd "C-c a") #'ai-code-menu)
+  ;;   (setq ai-code-backends-infra-terminal-backend 'ghostel))
 #+end_src
 
 * 笔记管理 (Denote)
@@ -685,43 +685,43 @@ Denote 是一个简洁的笔记系统，基于文件名约定（时间戳 + 标�
 来组织笔记，不依赖数据库，兼容任何文本格式。
 
 #+begin_src emacs-lisp
-(use-package denote
-  :ensure t
-  :hook
-  ((text-mode . denote-fontify-links-mode)
-   (dired-mode . denote-dired-mode))
-  :bind
-  (;; ── 笔记操作 (C-c n) ──
-   :map global-map
-   ("C-c n n" . denote)                ; 新建笔记
-   ("C-c n d" . denote-dired)          ; 在 Dired 中浏览笔记目录
-   ("C-c n g" . denote-grep)           ; 全文搜索笔记
-   ("C-c n l" . denote-link)           ; 插入到其他笔记的链接
-   ("C-c n L" . denote-add-links)      ; 批量添加链接
-   ("C-c n b" . denote-backlinks)      ; 查看反向链接
-   ("C-c n q c" . denote-query-contents-link)
-   ("C-c n q f" . denote-query-filenames-link)
-   ("C-c n r" . denote-rename-file)
-   ("C-c n R" . denote-rename-file-using-front-matter)
-   ;; ── Dired 中的批量操作 ──
-   :map dired-mode-map
-   ("C-c C-d C-i" . denote-dired-link-marked-notes)
-   ("C-c C-d C-r" . denote-dired-rename-files)
-   ("C-c C-d C-k" . denote-dired-rename-marked-files-with-keywords)
-   ("C-c C-d C-R" . denote-dired-rename-marked-files-using-front-matter))
+  ;; (use-package denote
+  ;;   :ensure t
+  ;;   :hook
+  ;;   ((text-mode . denote-fontify-links-mode)
+  ;;    (dired-mode . denote-dired-mode))
+  ;;   :bind
+  ;;   (;; ── 笔记操作 (C-c n) ──
+  ;;    :map global-map
+  ;;    ("C-c n n" . denote)                ; 新建笔记
+  ;;    ("C-c n d" . denote-dired)          ; 在 Dired 中浏览笔记目录
+  ;;    ("C-c n g" . denote-grep)           ; 全文搜索笔记
+  ;;    ("C-c n l" . denote-link)           ; 插入到其他笔记的链接
+  ;;    ("C-c n L" . denote-add-links)      ; 批量添加链接
+  ;;    ("C-c n b" . denote-backlinks)      ; 查看反向链接
+  ;;    ("C-c n q c" . denote-query-contents-link)
+  ;;    ("C-c n q f" . denote-query-filenames-link)
+  ;;    ("C-c n r" . denote-rename-file)
+  ;;    ("C-c n R" . denote-rename-file-using-front-matter)
+  ;;    ;; ── Dired 中的批量操作 ──
+  ;;    :map dired-mode-map
+  ;;    ("C-c C-d C-i" . denote-dired-link-marked-notes)
+  ;;    ("C-c C-d C-r" . denote-dired-rename-files)
+  ;;    ("C-c C-d C-k" . denote-dired-rename-marked-files-with-keywords)
+  ;;    ("C-c C-d C-R" . denote-dired-rename-marked-files-using-front-matter))
 
-  :config
-  (setq denote-directory (expand-file-name "~/Documents/notes/"))
-  (setq denote-save-buffers nil)
-  (setq denote-known-keywords '("network"))
-  (setq denote-infer-keywords t)
-  (setq denote-sort-keywords t)
-  (setq denote-prompts '(title keywords))
-  (setq denote-excluded-directories-regexp nil)
-  (setq denote-keywords-to-not-infer-regexp nil)
-  (setq denote-rename-confirmations '(rewrite-front-matter modify-file-name))
-  (setq denote-date-prompt-use-org-read-date t)
-  (denote-rename-buffer-mode 1))
+  ;;   :config
+  ;;   (setq denote-directory (expand-file-name "~/Documents/notes/"))
+  ;;   (setq denote-save-buffers nil)
+  ;;   (setq denote-known-keywords '("network"))
+  ;;   (setq denote-infer-keywords t)
+  ;;   (setq denote-sort-keywords t)
+  ;;   (setq denote-prompts '(title keywords))
+  ;;   (setq denote-excluded-directories-regexp nil)
+  ;;   (setq denote-keywords-to-not-infer-regexp nil)
+  ;;   (setq denote-rename-confirmations '(rewrite-front-matter modify-file-name))
+  ;;   (setq denote-date-prompt-use-org-read-date t)
+  ;;   (denote-rename-buffer-mode 1))
 #+end_src
 
 * 博客 (org-static-blog)
@@ -729,44 +729,44 @@ Denote 是一个简洁的笔记系统，基于文件名约定（时间戳 + 标�
 使用 org-static-blog 将 Org 文件发布为静态博客。
 
 #+begin_src emacs-lisp
-(use-package org-static-blog
-  :config
-  (setq org-static-blog-publish-title "with keke;")
-  (setq org-static-blog-publish-url "")
-  (setq org-static-blog-publish-directory "~/Repos/blog/")
-  (setq org-static-blog-posts-directory "~/Repos/blog/posts/")
-  (setq org-static-blog-drafts-directory "~/Repos/blog/drafts/")
-  (setq org-static-blog-enable-tags t)
-  (setq org-static-blog-use-preview t)
-  (setq org-export-with-toc t)
-  (setq org-export-with-section-numbers nil)
+  ;; (use-package org-static-blog
+  ;;   :config
+  ;;   (setq org-static-blog-publish-title "with keke;")
+  ;;   (setq org-static-blog-publish-url "")
+  ;;   (setq org-static-blog-publish-directory "~/Repos/blog/")
+  ;;   (setq org-static-blog-posts-directory "~/Repos/blog/posts/")
+  ;;   (setq org-static-blog-drafts-directory "~/Repos/blog/drafts/")
+  ;;   (setq org-static-blog-enable-tags t)
+  ;;   (setq org-static-blog-use-preview t)
+  ;;   (setq org-export-with-toc t)
+  ;;   (setq org-export-with-section-numbers nil)
 
-  ;; HTML <head> 中的 meta 信息和样式表
-  (setq org-static-blog-page-header
-	"
-          <meta name=\"author\" content=\"k\">
-          <meta name=\"referrer\" content=\"no-referrer\">
-          <meta name=\"viewport\" content=\"initial-scale=1,width=device-width,minimum-scale=1\">
-          <link href= \"static/style.css\" rel=\"stylesheet\" type=\"text/css\" />
-          <link rel=\"icon\" href=\"static/favicon.ico\">
-")
+  ;;   ;; HTML <head> 中的 meta 信息和样式表
+  ;;   (setq org-static-blog-page-header
+  ;; 	"
+  ;;           <meta name=\"author\" content=\"k\">
+  ;;           <meta name=\"referrer\" content=\"no-referrer\">
+  ;;           <meta name=\"viewport\" content=\"initial-scale=1,width=device-width,minimum-scale=1\">
+  ;;           <link href= \"static/style.css\" rel=\"stylesheet\" type=\"text/css\" />
+  ;;           <link rel=\"icon\" href=\"static/favicon.ico\">
+  ;; ")
 
-  ;; 页面顶部导航栏
-  (setq org-static-blog-page-preamble
-	"
-          <div class=\"header\">
-              <a href=\"index.html\">HOMEPAGE 🏠 /</a>
-              <a href=\"archive.html\">ALL POSTS 📄 /</a>
-              <a href=\"tags.html\">ALL POSTS BY TAGS 🏷 /</a>
-              <a href=\"2024-07-30-about.html\">ABOUT 👩‍✈️</a>
-          </div>
-")
+  ;;   ;; 页面顶部导航栏
+  ;;   (setq org-static-blog-page-preamble
+  ;; 	"
+  ;;           <div class=\"header\">
+  ;;               <a href=\"index.html\">HOMEPAGE 🏠 /</a>
+  ;;               <a href=\"archive.html\">ALL POSTS 📄 /</a>
+  ;;               <a href=\"tags.html\">ALL POSTS BY TAGS 🏷 /</a>
+  ;;               <a href=\"2024-07-30-about.html\">ABOUT 👩‍✈️</a>
+  ;;           </div>
+  ;; ")
 
-  ;; 页脚
-  (setq org-static-blog-page-postamble
-	"<center>keke @ 2024-2025</center>")
+  ;;   ;; 页脚
+  ;;   (setq org-static-blog-page-postamble
+  ;; 	"<center>keke @ 2024-2025</center>")
 
-  ;; 首页标题
-  (setq org-static-blog-index-front-matter
-	"<h1>with keke;</h1>\n"))
+  ;;   ;; 首页标题
+  ;;   (setq org-static-blog-index-front-matter
+  ;; 	"<h1>with keke;</h1>\n"))
 #+end_src
