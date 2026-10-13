@@ -437,6 +437,16 @@ Meow 是一个轻量的模态编辑框架，类似 Vim 但更贴合 Emacs 哲学
 
 Lua 用内置 =lua-ts-mode=（=treesit-enabled-modes=），不再装 =lua-mode=。
 
+Python 沿用 =treesit-enabled-modes= 自动切换到 =python-ts-mode=，Eglot 连接
+macOS/Linux 上由 Nix 声明安装的 =basedpyright-langserver=；Windows 上
+手动安装 Python、basedpyright 和 Ghostel 所需二进制并加入 PATH 即可，
+同一份 Elisp 配置不依赖 Nix。Python 解释器在 Windows 用 =python=，
+其它系统用 =python3=。仅 Python buffer 中的 =C-c c c=
+会保存并在右侧 Ghostel 运行当前 =.py=，同时将焦点移到输出窗口。
+Meow 普通模式下用 =SPC c c=，编辑模式下用 =C-c c c=；这些绑定仅限 Python。
+运行结束保留输出；输出窗口中单次 =C-c= 终止进程并关闭 buffer / 窗口。
+=C-x k= 也会清理进程和窗口，不改变其它 Ghostel 的退出行为。
+
 =typst-ts-mode= 把 =define-compilation-mode= 写进了 autoloads，Elpaca 加载
 该文件时 =compile= 往往还没就绪。关掉它的 autoloads，打开 =.typ= 再加载。
 
@@ -454,6 +464,142 @@ Lua 用内置 =lua-ts-mode=（=treesit-enabled-modes=），不再装 =lua-mode=�
   (use-package typst-ts-mode
     :ensure (:autoloads nil)
     :mode "\\.typ\\'")
+
+  ;;; Python: built-in tree-sitter mode + Eglot; basedpyright comes from Nix.
+  (use-package python
+    :ensure nil
+    :custom
+    (python-shell-interpreter (if (eq system-type 'windows-nt) "python" "python3"))
+    :bind (:map python-mode-map
+                ("C-c c c" . my/python-run-ghostel)
+           :map python-ts-mode-map
+                ("C-c c c" . my/python-run-ghostel)))
+
+  (use-package eglot
+    :ensure nil
+    :hook ((python-mode . eglot-ensure)
+           (python-ts-mode . eglot-ensure))
+    :config
+    (add-to-list 'eglot-server-programs
+                 '((python-mode python-ts-mode)
+                   . ("basedpyright-langserver" "--stdio"))))
+
+  (defun my/python-meow-setup ()
+    "Give Python a buffer-local SPC c c leader without C-c C-c collisions."
+    ;; Meow treats the first c as a Control prefix by default, and Python
+    ;; already binds C-c C-c to python-shell-send-buffer.  Use a local leader
+    ;; instead, leaving Meow's global leader and other modes untouched.
+    (setq-local meow-keypad-start-keys
+                (assq-delete-all ?c (copy-tree meow-keypad-start-keys)))
+    (let ((leader (make-sparse-keymap))
+          (run-map (make-sparse-keymap)))
+      (set-keymap-parent leader (meow--get-leader-keymap))
+      (define-key run-map (kbd "c") #'my/python-run-ghostel)
+      (define-key run-map (kbd "C-c") #'my/python-run-ghostel)
+      (define-key leader (kbd "c") run-map)
+      (setq-local meow-keypad-leader-dispatch leader)))
+
+  (with-eval-after-load 'meow
+    (add-hook 'python-mode-hook #'my/python-meow-setup)
+    (add-hook 'python-ts-mode-hook #'my/python-meow-setup))
+
+  (defvar-local my/python-output-window nil
+    "Window created for this Python output buffer.")
+  (defvar-local my/python-output-process nil
+    "Ghostel lifecycle process for this Python output buffer.")
+
+  (defun my/python-output-kill-process ()
+    "Force this Python session to stop before Ghostel releases its PTY."
+    (when (and (processp my/python-output-process)
+               (process-live-p my/python-output-process))
+      (let* ((process my/python-output-process)
+             (pid (or (process-get process 'ghostel--native-pid)
+                      (process-id process))))
+        (set-process-query-on-exit-flag process nil)
+        (when (and (integerp pid) (> pid 0))
+          (if (eq system-type 'windows-nt)
+              ;; taskkill is part of Windows; /T includes child processes.
+              (unless (and (executable-find "taskkill")
+                           (zerop (call-process "taskkill" nil nil nil
+                                                "/F" "/T" "/PID"
+                                                (number-to-string pid))))
+                (ignore-errors (signal-process pid 9)))
+            ;; A local PTY child has its own process group.  Kill that group,
+            ;; not just the Python parent, then let Ghostel's hook reap it.
+            (unless (eq 0 (ignore-errors (signal-process (- pid) 9)))
+              (ignore-errors (signal-process pid 9))))))))
+
+  (defun my/python-output-stop ()
+    "Stop this Python Ghostel session and close its output window."
+    (interactive)
+    (let ((kill-buffer-query-functions nil))
+      (kill-buffer (current-buffer))))
+
+  (define-minor-mode my/python-output-mode
+    "Single C-c closes only a Python runner terminal, even with Meow active."
+    :init-value nil
+    :lighter nil
+    :keymap (let ((map (make-sparse-keymap)))
+              (define-key map (kbd "C-c") #'my/python-output-stop)
+              map)
+    (when my/python-output-mode
+      ;; Buffer-local first priority, even if Ghostel was loaded later.
+      (setq-local emulation-mode-map-alists
+                  (cons 'my/python-output-emulation-alist
+                        (remq 'my/python-output-emulation-alist
+                              emulation-mode-map-alists)))))
+
+  (defvar my/python-output-emulation-alist
+    `((my/python-output-mode . ,my/python-output-mode-map)))
+
+  (defun my/python-output-delete-window ()
+    "Delete only this output buffer's original window when it is killed."
+    (when (and (window-live-p my/python-output-window)
+               (eq (window-buffer my/python-output-window) (current-buffer))
+               (not (one-window-p t (window-frame my/python-output-window))))
+      (delete-window my/python-output-window)))
+
+  (defun my/python-run-ghostel ()
+    "Save and run the current Python file in a new Ghostel window on the right.
+Select the output window.  C-c stops the session and closes its window.
+Keep output after Python exits until explicitly closed.
+Honor `python-shell-virtualenv-root' and Python's process environment."
+    (interactive)
+    (unless (and (derived-mode-p 'python-mode 'python-ts-mode)
+                 buffer-file-name
+                 (string-equal (file-name-extension buffer-file-name) "py"))
+      (user-error "Run this command in a Python buffer visiting a .py file"))
+    (when (file-remote-p buffer-file-name)
+      (user-error "This runner currently supports local Python files only"))
+    (require 'ghostel)
+    (save-buffer)
+    (let ((file (expand-file-name buffer-file-name))
+          (default-directory (file-name-directory buffer-file-name)))
+      (python-shell-with-environment
+        (let ((python (executable-find python-shell-interpreter)))
+          (unless python
+            (user-error "Python interpreter not found: %s" python-shell-interpreter))
+          (let ((window (split-window-right))
+                (output (generate-new-buffer
+                         (format "*Python: %s*" (file-name-nondirectory file)))))
+            (condition-case err
+                (progn
+                  (set-window-buffer window output)
+                  (select-window window)
+                  (let ((process (ghostel-exec output python (list "-u" file))))
+                    ;; ghostel-exec initializes the major mode, so set locals afterwards.
+                    (setq-local ghostel-kill-buffer-on-exit nil
+                                my/python-output-window window
+                                my/python-output-process process)
+                    (my/python-output-mode 1)
+                    (add-hook 'kill-buffer-hook
+                              #'my/python-output-delete-window nil t)
+                    (add-hook 'kill-buffer-hook
+                              #'my/python-output-kill-process nil t)))
+              ((error quit)
+               (when (buffer-live-p output) (kill-buffer output))
+               (when (window-live-p window) (delete-window window))
+               (signal (car err) (cdr err)))))))))
 
   ;;;Windows
   (when (eq system-type 'windows-nt)
