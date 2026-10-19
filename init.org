@@ -252,6 +252,87 @@ Cape 提供额外的 =completion-at-point= 后端函数，如 dabbrev（动态�
   (global-hl-line-mode 1))
 #+end_src
 
+** 缩进层级与彩虹括号
+
+全局编程/配置 buffer 启用缩进竖线，空行保持连续，当前缩进层加亮。
+Python / JSON / HTML 的 tree-sitter 模式还会区分当前作用域。
+用字符 =│= 绘制，兼容 macOS、Windows 和终端，不改真实缩进。
+圆括号 =()=、方括号 =[]=、花括号 ={}= 统一按嵌套深度着色，最外层
+也有颜色；显式使用 Catppuccin 九色，兼顾 GUI / 终端和深浅背景，不依赖
+GUI 才加载的主题。tree-sitter 上色完成后补绘，忽略字符串和注释。
+这些都是纯 Elisp 包，由 Elpaca 安装，不改 flakes。
+
+#+begin_src emacs-lisp
+  (defun my/rainbow-delimiters-ts-fontify (beg end &rest _)
+    "Apply rainbow brackets after tree-sitter fontification in this buffer."
+    (when (bound-and-true-p rainbow-delimiters-mode)
+      (save-excursion
+        (save-match-data
+          (save-restriction
+            (goto-char beg)
+            (rainbow-delimiters--propertize end))))))
+
+  (defun my/rainbow-delimiters-setup-faces ()
+    "Use distinct depth colors for (), [] and {} on GUI and color terminals."
+    (let ((dark ["#f38ba8" "#fab387" "#f9e2af" "#a6e3a1" "#94e2d5"
+                 "#74c7ec" "#89b4fa" "#b4befe" "#cba6f7"])
+          (light ["#d20f39" "#fe640b" "#df8e1d" "#40a02b" "#179299"
+                  "#209fb5" "#1e66f5" "#7287fd" "#8839ef"]))
+      (dotimes (i 9)
+        ;; User face settings survive later GUI theme changes and also apply
+        ;; to terminal frames, where our GUI-only theme setup does not run.
+        (custom-theme-set-faces
+         'user
+         `(,(intern (format "rainbow-delimiters-depth-%d-face" (1+ i)))
+           ((((background dark)) (:foreground ,(aref dark i)))
+            (t (:foreground ,(aref light i)))))))))
+
+  (use-package rainbow-delimiters
+    :demand t
+    :custom
+    (rainbow-delimiters-max-face-count 9)
+    (rainbow-delimiters-outermost-only-face-count 0)
+    :config
+    (my/rainbow-delimiters-setup-faces)
+    ;; TS modes bypass the traditional font-lock-keywords matcher used by
+    ;; rainbow-delimiters.  Reapply it only in buffers where the mode is on.
+    (with-eval-after-load 'treesit
+      (advice-add 'treesit-font-lock-fontify-region :after
+                  #'my/rainbow-delimiters-ts-fontify)))
+
+  (defun my/code-indent-bars-enable ()
+    "Enable guides and rainbow brackets in a programming/config buffer."
+    ;; Enable rainbow first: indent-bars may immediately trigger fontification.
+    (rainbow-delimiters-mode-enable)
+    (indent-bars-mode 1))
+
+  (use-package indent-bars
+    :ensure (:repo "https://github.com/jdtsmith/indent-bars.git"
+             :files (:defaults))
+    :after rainbow-delimiters
+    :demand t
+    :custom
+    (indent-bars-prefer-character t)
+    (indent-bars-no-stipple-char ?│)
+    (indent-bars-display-on-blank-lines t)
+    (indent-bars-color '(font-lock-comment-face :blend 0.5))
+    (indent-bars-color-by-depth
+     '(:regexp "rainbow-delimiters-depth-\\([0-9]+\\)-face" :blend 0.4))
+    (indent-bars-highlight-current-depth '(:blend 1.0))
+    (indent-bars-highlight-selection-method 'on-bar)
+    (indent-bars-treesit-support t)
+    (indent-bars-treesit-scope
+     '((python function_definition class_definition if_statement for_statement
+               while_statement with_statement try_statement match_statement)
+       (json object array)
+       (html element script_element)))
+    :hook ((prog-mode . my/code-indent-bars-enable)
+           (conf-mode . my/code-indent-bars-enable)
+           (html-ts-mode . my/code-indent-bars-enable))
+    :config
+    (require 'indent-bars-ts))
+#+end_src
+
 ** 主题 (Catppuccin)
 
 #+begin_src emacs-lisp
@@ -447,6 +528,23 @@ Meow 普通模式下用 =SPC c c=，编辑模式下用 =C-c c c=；这些绑定�
 运行结束保留输出；输出窗口中单次 =C-c= 终止进程并关闭 buffer / 窗口。
 =C-x k= 也会清理进程和窗口，不改变其它 Ghostel 的退出行为。
 
+JSON 默认使用 =json-ts-mode=。JSON 和 Python 均启用 Combobulate，
+Meow 普通模式下 =SPC ↑= 跳父级、=SPC ↓= 进入子级；编辑模式下对应
+=C-c ↑= / =C-c ↓=。仅这两类 buffer 使用这些键，不改全局 leader。
+Combobulate 为纯 Elisp，由 Elpaca 安装；tree-sitter 沿用现有语法库配置。
+JSON / Python 中 =SPC s s=（编辑模式 =C-c s s=）在当前窗口显示整个
+buffer 的 Combobulate 结构树（不截断为光标附近的几层）；=q= 返回。
+这是结构列表，不是可以点击跳转的大纲。结构视图中按 =s= 导出 Markdown，
+默认保存到原文件同目录的 =文件名.structure.md=（如 =1.structure.md=），
+不询问路径；已有文件会确认覆盖。完整树放在 UTF-8 代码块中保留对齐。
+生成视图时记录原文件路径，关闭中间阅读 buffer 后仍可导出。
+
+HTML 默认使用 =html-ts-mode=。仅 HTML buffer 中的 =SPC j j=（编辑模式
+=C-c j j=）在当前窗口打开内嵌 JSON 的独立只读 buffer，不创建文件，
+不修改原 HTML。多段 JSON 时每次都选择 =application/json= 或
+=application/ld+json= 等 JSON script。阅读 buffer 使用 =json-ts-mode= 和
+Combobulate，可用 =SPC ↑= / =SPC ↓= 导航；=q= 关闭并返回 HTML。
+
 =typst-ts-mode= 把 =define-compilation-mode= 写进了 autoloads，Elpaca 加载
 该文件时 =compile= 往往还没就绪。关掉它的 autoloads，打开 =.typ= 再加载。
 
@@ -465,15 +563,308 @@ Meow 普通模式下用 =SPC c c=，编辑模式下用 =C-c c c=；这些绑定�
     :ensure (:autoloads nil)
     :mode "\\.typ\\'")
 
-    ;;; Python: built-in tree-sitter mode + Eglot; basedpyright comes from Nix.
+  ;;; HTML: use the existing automatic tree-sitter grammar installation.
+  (use-package html-ts-mode
+    :ensure nil
+    :mode "\\.html?\\'"
+    :bind (:map html-ts-mode-map
+                ("C-c j j" . my/html-view-json)))
+
+  (defun my/html-meow-setup ()
+    "Bind SPC j j only in this HTML buffer."
+    (let ((leader (make-sparse-keymap))
+          (json-map (make-sparse-keymap)))
+      (set-keymap-parent leader (meow--get-leader-keymap))
+      (define-key json-map (kbd "j") #'my/html-view-json)
+      (define-key json-map (kbd "C-j") #'my/html-view-json)
+      (define-key leader (kbd "j") json-map)
+      (setq-local meow-keypad-leader-dispatch leader)))
+
+  (with-eval-after-load 'meow
+    (add-hook 'html-ts-mode-hook #'my/html-meow-setup))
+
+  (defun my/html-script-attribute (tag name)
+    "Return attribute NAME of the tree-sitter start TAG, or nil."
+    (let (value)
+      (dotimes (i (treesit-node-child-count tag t))
+        (let ((attribute (treesit-node-child tag i t)))
+          (when (and (equal (treesit-node-type attribute) "attribute")
+                     (string-equal
+                      (downcase (treesit-node-text
+                                 (treesit-node-child attribute 0 t) t))
+                      name))
+            (let ((node (treesit-node-child attribute 1 t)))
+              (when node
+                (when (equal (treesit-node-type node) "quoted_attribute_value")
+                  (setq node (treesit-node-child node 0 t)))
+                (when node (setq value (treesit-node-text node t))))))))
+      value))
+
+  (defun my/html-json-scripts ()
+    "List JSON script entries with :label, :beg and :end in this HTML buffer."
+    (let (entries)
+      (dolist (script (treesit-query-capture
+                       (treesit-buffer-root-node 'html)
+                       '((script_element) @script) nil nil t))
+        (let* ((tag (treesit-node-child script 0 t))
+               (type (downcase (string-trim
+                               (car (split-string
+                                     (or (my/html-script-attribute tag "type") "")
+                                     ";")))))
+               (id (my/html-script-attribute tag "id"))
+               body)
+          (when (or (equal type "application/json")
+                    (string-match-p "\\`application/[^;]+\\+json\\'" type))
+            (dotimes (i (treesit-node-child-count script t))
+              (let ((child (treesit-node-child script i t)))
+                (when (equal (treesit-node-type child) "raw_text")
+                  (setq body child))))
+            (when body
+              (push (list :label (format "%s · %s · line %d"
+                                        (if id (concat "#" id) "script") type
+                                        (line-number-at-pos (treesit-node-start script)))
+                          :beg (treesit-node-start body)
+                          :end (treesit-node-end body))
+                    entries)))))
+      (nreverse entries)))
+
+  (defvar-local my/html-json-source-buffer nil
+    "HTML buffer from which this independent JSON view was created.")
+
+  (defun my/html-json-view-quit ()
+    "Close this JSON view and return to its HTML source in the same window."
+    (interactive)
+    (let ((source my/html-json-source-buffer)
+          (view (current-buffer)))
+      (if (buffer-live-p source)
+          (switch-to-buffer source)
+        (switch-to-prev-buffer))
+      (kill-buffer view)))
+
+  (define-minor-mode my/html-json-view-mode
+    "Read-only JSON view with q to return, including in Meow normal state."
+    :init-value nil
+    :lighter " View"
+    :keymap (let ((map (make-sparse-keymap)))
+              (define-key map (kbd "q") #'my/html-json-view-quit)
+              map)
+    (when my/html-json-view-mode
+      (setq-local emulation-mode-map-alists
+                  (cons 'my/html-json-view-emulation-alist
+                        (remq 'my/html-json-view-emulation-alist
+                              emulation-mode-map-alists)))))
+
+  (defvar my/html-json-view-emulation-alist
+    `((my/html-json-view-mode . ,my/html-json-view-mode-map)))
+
+  (defun my/html-view-json ()
+    "Choose an embedded JSON script and view a read-only copy in this window.
+Always prompt if multiple scripts exist, regardless of point.  q returns
+ to the source HTML.  No file is created and the HTML is not modified."
+    (interactive)
+    (unless (derived-mode-p 'html-ts-mode)
+      (user-error "Run this command in an HTML tree-sitter buffer"))
+    (let* ((source (current-buffer))
+           (entries (my/html-json-scripts))
+           (entry (if (= (length entries) 1)
+                      (car entries)
+                    (when entries
+                      (let ((choices (mapcar (lambda (item)
+                                               (cons (plist-get item :label) item))
+                                             entries)))
+                        (cdr (assoc (completing-read "JSON script: " choices nil t)
+                                    choices)))))))
+      (unless entry (user-error "No embedded JSON script found"))
+      (let ((text (buffer-substring-no-properties
+                   (plist-get entry :beg) (plist-get entry :end))))
+        (condition-case err
+            (json-parse-string text)
+          (error (user-error "Invalid JSON in %s: %s"
+                             (plist-get entry :label) (error-message-string err))))
+        (let ((view (generate-new-buffer
+                     (format "*JSON: %s · %s*" (buffer-name) (plist-get entry :label)))))
+          (condition-case err
+              (progn
+                (with-current-buffer view
+                  (insert text)
+                  (json-ts-mode)
+                  ;; Independent text properties prevent HTML/JSON font-lock clashes.
+                  (font-lock-mode 1)
+                  (font-lock-flush)
+                  (font-lock-ensure)
+                  (setq-local my/html-json-source-buffer source
+                              buffer-read-only t
+                              buffer-offer-save nil)
+                  (my/html-json-view-mode 1)
+                  (set-buffer-modified-p nil)
+                  (goto-char (point-min)))
+                (switch-to-buffer view))
+            ((error quit)
+             (when (buffer-live-p view) (kill-buffer view))
+             (signal (car err) (cdr err))))))))
+
+  ;;; JSON + Python structural navigation (pure Elisp via Elpaca).
+  (use-package json-ts-mode
+    :ensure nil
+    :mode "\\.json\\'"
+    :bind (:map json-ts-mode-map
+                ("C-c <up>" . combobulate-navigate-up)
+                ("C-c <down>" . combobulate-navigate-down)
+                ("C-c s s" . my/combobulate-show-structure)))
+
+  (defun my/combobulate-enable ()
+    "Enable Combobulate explicitly in supported JSON and Python buffers."
+    (require 'combobulate)
+    (combobulate-mode 1))
+
+  (use-package combobulate
+    :ensure (:repo "https://github.com/mickeynp/combobulate.git"
+             :files (:defaults) :autoloads nil)
+    :commands (combobulate-mode combobulate-navigate-up combobulate-navigate-down)
+    :hook ((json-ts-mode . my/combobulate-enable)
+           (python-mode . my/combobulate-enable)
+           (python-ts-mode . my/combobulate-enable)))
+
+  (defvar-local my/combobulate-structure-source nil
+    "Source buffer for this read-only Combobulate structure view.")
+  (defvar-local my/combobulate-structure-origin-file nil
+    "Original file path captured when this structure view was created.")
+
+  (defun my/combobulate-original-file (buffer)
+    "Follow JSON/structure source links from BUFFER to its original file."
+    (let (seen file)
+      (while (and (buffer-live-p buffer) (not (memq buffer seen)) (not file))
+        (push buffer seen)
+        (with-current-buffer buffer
+          (if buffer-file-name
+              (setq file (expand-file-name buffer-file-name))
+            (setq buffer (or (bound-and-true-p my/html-json-source-buffer)
+                             (bound-and-true-p my/combobulate-structure-source))))))
+      file))
+
+  (defun my/combobulate-structure-export-markdown ()
+    "Export the complete structure beside its original file, without a path prompt."
+    (interactive)
+    (unless (and my/combobulate-structure-view-mode
+                 my/combobulate-structure-origin-file)
+      (user-error "This structure view has no original file to export beside"))
+    (let* ((file (concat (file-name-sans-extension
+                         my/combobulate-structure-origin-file)
+                        ".structure.md"))
+           (text (save-restriction
+                   (widen)
+                   (buffer-substring-no-properties (point-min) (point-max))))
+           (longest 0)
+           (start 0))
+      ;; A key/node label could contain backticks; choose a longer fence so
+      ;; no tree text can accidentally close the Markdown code block.
+      (while (string-match "`+" text start)
+        (setq longest (max longest (- (match-end 0) (match-beginning 0)))
+              start (match-end 0)))
+      (unless (or (not (file-exists-p file))
+                  (y-or-n-p (format "Overwrite %s? " file)))
+        (user-error "Export cancelled"))
+      (let ((fence (make-string (max 3 (1+ longest)) ?`))
+            (coding-system-for-write 'utf-8-unix))
+        (with-temp-file file
+          (insert "# Buffer structure\n\n" fence "text\n" text)
+          (unless (string-suffix-p "\n" text) (insert "\n"))
+          (insert fence "\n")))
+      (message "Structure exported to %s" file)))
+
+  (defun my/combobulate-structure-quit ()
+    "Close the structure view and return to its source buffer."
+    (interactive)
+    (let ((source my/combobulate-structure-source)
+          (view (current-buffer)))
+      (if (buffer-live-p source)
+          (switch-to-buffer source)
+        (switch-to-prev-buffer))
+      (kill-buffer view)))
+
+  (define-minor-mode my/combobulate-structure-view-mode
+    "Keep q (return) and s (export) available even with Meow active."
+    :init-value nil
+    :lighter nil
+    :keymap (let ((map (make-sparse-keymap)))
+              (define-key map (kbd "q") #'my/combobulate-structure-quit)
+              (define-key map (kbd "s") #'my/combobulate-structure-export-markdown)
+              map)
+    (when my/combobulate-structure-view-mode
+      (setq-local emulation-mode-map-alists
+                  (cons 'my/combobulate-structure-emulation-alist
+                        (remq 'my/combobulate-structure-emulation-alist
+                              emulation-mode-map-alists)))))
+
+  (defvar my/combobulate-structure-emulation-alist
+    `((my/combobulate-structure-view-mode . ,my/combobulate-structure-view-mode-map)))
+
+  (defun my/combobulate-show-structure ()
+    "Show the full buffer's navigable structure with Combobulate's renderer."
+    (interactive)
+    (unless (derived-mode-p 'json-ts-mode 'python-mode 'python-ts-mode)
+      (user-error "Use this command in a JSON or Python buffer"))
+    (require 'combobulate)
+    (unless (combobulate-read minor-mode)
+      (combobulate-mode))
+    (let* ((source (current-buffer))
+           (origin-file (my/combobulate-original-file source))
+           (text (save-excursion
+                   (goto-char (point-min))
+                   (with-navigation-nodes
+                       (:procedures (combobulate-read procedures-hierarchy))
+                     (combobulate-display-draw-tree-1
+                      (combobulate-display-make-tree
+                       (combobulate-root-node) most-positive-fixnum)))))
+           (view (generate-new-buffer (format "*Structure: %s*" (buffer-name)))))
+      (condition-case err
+          (progn
+            (with-current-buffer view
+              (insert text "\n")
+              (special-mode)
+              (setq-local my/combobulate-structure-source source
+                          my/combobulate-structure-origin-file origin-file
+                          buffer-offer-save nil)
+              (my/combobulate-structure-view-mode 1)
+              (set-buffer-modified-p nil)
+              (goto-char (point-min)))
+            (switch-to-buffer view))
+        ((error quit)
+         (when (buffer-live-p view) (kill-buffer view))
+         (signal (car err) (cdr err))))))
+
+  (defun my/combobulate-meow-setup ()
+    "Add structural arrows and SPC s s to this buffer's Meow leader only."
+    (let ((leader (make-sparse-keymap))
+          (structure-map (make-sparse-keymap)))
+      (set-keymap-parent leader (meow--get-leader-keymap))
+      (define-key leader (kbd "<up>") #'combobulate-navigate-up)
+      (define-key leader (kbd "<down>") #'combobulate-navigate-down)
+      (define-key structure-map (kbd "s") #'my/combobulate-show-structure)
+      (define-key structure-map (kbd "C-s") #'my/combobulate-show-structure)
+      (define-key leader (kbd "s") structure-map)
+      (setq-local meow-keypad-leader-dispatch leader)))
+
+  (with-eval-after-load 'meow
+    (add-hook 'json-ts-mode-hook #'my/combobulate-meow-setup)
+    (add-hook 'python-mode-hook #'my/combobulate-meow-setup)
+    (add-hook 'python-ts-mode-hook #'my/combobulate-meow-setup))
+
+  ;;; Python: built-in tree-sitter mode + Eglot; basedpyright comes from Nix.
   (use-package python
     :ensure nil
     :custom
     (python-shell-interpreter (if (eq system-type 'windows-nt) "python" "python3"))
     :bind (:map python-mode-map
                 ("C-c c c" . my/python-run-ghostel)
-                :map python-ts-mode-map
-                ("C-c c c" . my/python-run-ghostel)))
+                ("C-c <up>" . combobulate-navigate-up)
+                ("C-c <down>" . combobulate-navigate-down)
+                ("C-c s s" . my/combobulate-show-structure)
+           :map python-ts-mode-map
+                ("C-c c c" . my/python-run-ghostel)
+                ("C-c <up>" . combobulate-navigate-up)
+                ("C-c <down>" . combobulate-navigate-down)
+                ("C-c s s" . my/combobulate-show-structure)))
 
   (use-package eglot
     :ensure nil
