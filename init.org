@@ -245,11 +245,131 @@ Cape 提供额外的 =completion-at-point= 后端函数，如 dabbrev（动态�
 ** 基础界面
 
 #+begin_src emacs-lisp
+;; GUI 窗口按像素缩放，不再以整行/整列为步长，避免贴边时留下空隙。
+(setq frame-resize-pixelwise t)
+
 (when (display-graphic-p)
   ;; 像素级平滑滚动（Emacs 29+）
   (pixel-scroll-precision-mode 1)
   ;; 高亮当前行
   (global-hl-line-mode 1))
+#+end_src
+
+** 自适应原生 modeline
+
+不依赖外部 modeline 包。每个窗口按自己的实际宽度排版，优先显示
+Meow 状态、修改/只读标记、文件名、=行:列=；文件名过长时从中间缩略。
+有余量才加入模式、Notebook/cell、LSP、进程/诊断、Git、编码与滚动位置。
+=*=: 已修改，=R=: 只读，=-=: 未修改。悬浮 modeline 可查看完整信息。
+
+#+begin_src emacs-lisp
+  (defun my/modeline-fit (text width)
+    "Fit TEXT in WIDTH display columns, preserving both ends when truncated."
+    (setq width (max 0 width))
+    (cond ((<= (string-width text) width) text)
+          ((= width 0) "")
+          ((= width 1) "…")
+          (t
+           (let* ((tail (min 8 (/ (1- width) 3)))
+                  (head (- width tail 1))
+                  (total (string-width text)))
+             (concat (truncate-string-to-width text head)
+                     "…"
+                     (truncate-string-to-width text total (- total tail)))))))
+
+  (defun my/modeline-name ()
+    "Return a useful name, including for virtual notebook/JSON/tree views."
+    (let ((source
+           (cond
+            ((and (bound-and-true-p my/org-notebook-cell-edit-mode)
+                  (fboundp 'org-src-source-buffer))
+             (ignore-errors (org-src-source-buffer)))
+            ((bound-and-true-p my/html-json-source-buffer))
+            ((bound-and-true-p my/combobulate-structure-source)))))
+      (if (buffer-live-p source)
+          (with-current-buffer source
+            (if buffer-file-name (file-name-nondirectory buffer-file-name) (buffer-name)))
+        (if buffer-file-name (file-name-nondirectory buffer-file-name) (buffer-name)))))
+
+  (defun my/modeline-mode-label ()
+    (concat
+     (pcase major-mode
+       ((or 'python-mode 'python-ts-mode) "Py")
+       ('json-ts-mode "JSON") ('html-ts-mode "HTML")
+       ('org-mode "Org") ('emacs-lisp-mode "Elisp")
+       (_ (string-remove-suffix "-mode" (symbol-name major-mode))))
+     (cond ((bound-and-true-p my/org-notebook-cell-edit-mode) ":Cell")
+           ((bound-and-true-p my/org-notebook-mode) ":NB")
+           ((bound-and-true-p my/combobulate-structure-view-mode) ":Tree")
+           (t ""))))
+
+  (defun my/modeline-help (window _object _position)
+    "Show native full status on demand rather than crowding narrow windows."
+    (when (window-live-p window)
+      (with-current-buffer (window-buffer window)
+        (format "%s\n%s\n%s\n%s\n*: modified · R: read-only · position: line:column (column starts at 0)"
+                (buffer-name) (or buffer-file-name default-directory)
+                (format-mode-line mode-line-modes nil window)
+                (format-mode-line '(vc-mode "  " mode-line-process "  " "%Z") nil window)))))
+
+  (defun my/modeline-layout (width state flags name position extras)
+    "Render a single line, reserving POSITION and identity before EXTRAS."
+    (let* ((budget (max 1 (- width 2)))
+           (prefix (concat (when state
+                             (propertize (if (< width 28) state (concat "[" state "]"))
+                                         'face 'mode-line-emphasis))
+                           (propertize flags 'face (if (string-match-p "[*R]" flags)
+                                                       'warning 'mode-line))
+                           " "))
+           (minimum-name (min 12 (string-width name)))
+           (selected ""))
+      (dolist (extra extras)
+        (when (and (stringp extra) (not (string-empty-p extra))
+                   (<= (+ (string-width prefix) minimum-name
+                          (string-width selected) 1 (string-width extra)
+                          1 (string-width position)) budget))
+          (setq selected (concat selected " " extra))))
+      (let* ((name-width (max 1 (- budget (string-width prefix)
+                                   (string-width selected) (string-width position) 1)))
+             (fitted (propertize (my/modeline-fit name name-width)
+                                'face 'mode-line-buffer-id))
+             (gap (max 1 (- budget (string-width prefix) (string-width fitted)
+                            (string-width selected) (string-width position))))
+             (line (concat " " prefix fitted selected (make-string gap ?\s) position " ")))
+        ;; Only impossibly small windows (< identity + position) need a final clip.
+        (propertize (if (> (string-width line) width) (my/modeline-fit line width) line)
+                    'help-echo #'my/modeline-help))))
+
+  (defun my/modeline-render ()
+    "Use the window currently being rendered, not a fixed frame-width threshold."
+    (let* ((window (selected-window))
+           (width (window-total-width window))
+           (state (cond ((bound-and-true-p meow-keypad-mode) "K")
+                        ((bound-and-true-p meow-beacon-mode) "B")
+                        ((bound-and-true-p meow-insert-mode) "I")
+                        ((bound-and-true-p meow-normal-mode) "N")
+                        ((bound-and-true-p meow-motion-mode) "M")))
+           (flags (concat (if (buffer-modified-p) "*" "-")
+                          (when buffer-read-only "R")))
+           (name (replace-regexp-in-string "[\n\r\t]" " " (my/modeline-name)))
+           (position (format-mode-line "%l:%c" nil window))
+           (extras (list (my/modeline-fit (my/modeline-mode-label) 18)
+                         (when (bound-and-true-p eglot--managed-mode) "LSP")
+                         (when (>= width 60)
+                           (my/modeline-fit (string-trim (format-mode-line mode-line-process nil window)) 22))
+                         (when (and (>= width 70) (bound-and-true-p vc-mode))
+                           (my/modeline-fit (string-trim (format-mode-line vc-mode nil window)) 20))
+                         (when (>= width 80) (format-mode-line "%Z" nil window))
+                         (when (>= width 90) (string-trim (format-mode-line "%p" nil window))))))
+      ;; Escape literal % in filenames/status; native mode-line formatting will
+      ;; interpret the returned string once more.  No packages are loaded here.
+      (replace-regexp-in-string
+       "%" "%%" (my/modeline-layout width state flags name position extras) t t)))
+
+  (line-number-mode 1)
+  (column-number-mode 1)
+  (setq-default mode-line-format '("%e" (:eval (my/modeline-render))))
+  (force-mode-line-update t)
 #+end_src
 
 ** 缩进层级与彩虹括号
@@ -304,7 +424,11 @@ GUI 才加载的主题。tree-sitter 上色完成后补绘，忽略字符串和�
     "Enable guides and rainbow brackets in a programming/config buffer."
     ;; Enable rainbow first: indent-bars may immediately trigger fontification.
     (rainbow-delimiters-mode-enable)
-    (indent-bars-mode 1))
+    ;; Org reuses hidden buffers to color source blocks.  indent-bars enables
+    ;; font-lock there and can replace the TS fontifier with the regex one;
+    ;; the next cell/refontification then loses all native Python faces.
+    (unless (string-prefix-p " *org-src-fontification:" (buffer-name))
+      (indent-bars-mode 1)))
 
   (use-package indent-bars
     :ensure (:repo "https://github.com/jdtsmith/indent-bars.git"
@@ -410,6 +534,431 @@ Org-modern 让 Org-mode 拥有更现代化的视觉效果：美化标题标记�
   (set-face-attribute 'org-ellipsis nil :inherit 'default :box nil)
 
   (global-org-modern-mode))
+#+end_src
+
+* Org Python Notebook
+
+使用内置 =ob-python=，不是 Jupyter kernel，也不读写 =.ipynb=。
+=M-x my/org-notebook-new= 新建 =.org= notebook；=:notebook:= 文件标签
+会让它重开时自动启用。也可在现有 Org 中手动切换 =my/org-notebook-mode=。
+普通 Org 笔记和 =init.org= 不启用这些按键。Python 默认每个文件一个会话，
+cell 间共享变量，结果就地替换。仅 notebook 内执行免确认，普通 Org 的
+执行确认设置不变；只对可信 notebook 使用此模式。
+Python 异常及 stderr 显示在当前 cell 的 =#+RESULTS= 中；失败时不自动
+跳转或新增 cell，修正后重跑会替换旧的错误结果。
+
+| Meow 普通模式 | 编辑模式 | 操作 |
+|---------------+----------+------|
+| =SPC n r= | =C-c n r= / =Ctrl+Enter= | 执行当前 cell，停留 |
+| =SPC n x= | =C-c n x= / =Shift+Enter= | 执行后进入下一 cell，末尾自动新增 |
+| =SPC n j= / =SPC n k= | =C-c n j= / =C-c n k= | 下一 / 上一 cell |
+| =SPC n p= | =C-c n p= | 在正文光标处插入 Python cell；cell 内则紧接当前 cell 新增 |
+| =SPC n a= / =SPC n b= | =C-c n a= / =C-c n b= | 在当前 cell 上方 / 下方新增 Python cell |
+| =Enter= / =SPC n e= | =C-c n e= | 进入 Python 编辑；普通状态按 =Esc= 写回并返回 Org |
+| =SPC n c= | =C-c n c= | 清除当前 cell 的结果 |
+| =SPC n s= | =C-c n s= | 确认后重启默认 Python 会话，清空变量 |
+
+终端可能无法区分 =Shift+Enter= / =Ctrl+Enter=，此时用 =SPC n x= / =SPC n r=。
+所有 Org buffer 默认视觉换行，不向文件插入真实换行。Notebook 的 cell 编辑
+使用 =python-ts-mode= 和已有 Eglot/basedpyright、补全、彩虹括号及缩进线。
+进入 cell 编辑后默认保持 Meow 普通状态，按 =i= 才进入插入状态。
+代码编辑中，插入状态的 =Esc= 先切回 Meow 普通状态；只有普通状态再次
+按 =Esc= 才结束 cell 编辑。代码编辑 buffer 使用虚拟 =.py= 路径提供 LSP，
+不生成临时 Python 文件；
+=C-c c c= 执行 cell 并返回 Org，而不是运行不存在的虚拟文件。
+图像文件结果支持内联刷新；绘图库等 Python 第三方依赖仍需由 Nix 声明安装。
+
+#+begin_src emacs-lisp
+  (defvar-local my/org-notebook--saved-locals nil)
+  (defvar-local my/org-notebook--session nil)
+  (defvar-local my/org-notebook--execution-error nil)
+  (defvar my/org-notebook--capture-python-errors nil)
+  (defvar my/org-notebook--python-error-output nil)
+
+  (defun my/org-notebook-python-send-with-errors (original session body &rest args)
+    "Capture session errors before Babel's end-of-output marker is printed."
+    (if (not my/org-notebook--capture-python-errors)
+        (apply original session body args)
+      (let* ((marker (concat "__ORG_NOTEBOOK_ERROR_"
+                             (secure-hash 'sha1 (format "%s:%s" (float-time) (random)))
+                             "__"))
+             (wrapped
+              (concat
+               "with __import__('contextlib').redirect_stderr(__import__('sys').stdout):\n"
+               "    try:\n" (org-babel-python--shift-right body 8) "\n"
+               "    except BaseException:\n"
+               "        __import__('traceback').print_exc(file=__import__('sys').stdout)\n"
+               "        __import__('sys').stdout.write('" marker "\\n')\n"))
+             (output (apply original session wrapped args)))
+        (when (and (stringp output)
+                   (string-match (concat "^" (regexp-quote marker) "[\r\n]*\\'") output))
+          (setq output (string-trim-right (substring output 0 (match-beginning 0)))
+                my/org-notebook--python-error-output output))
+        output)))
+
+  (defun my/org-notebook-python-evaluate-with-errors (original &rest args)
+    "Return traceback text as the cell result for failed notebook Python cells."
+    (if (not (bound-and-true-p my/org-notebook-mode))
+        (apply original args)
+      (setq my/org-notebook--execution-error nil)
+      (let* ((my/org-notebook--capture-python-errors t)
+             (my/org-notebook--python-error-output nil)
+             (result
+              (condition-case err
+                  (apply original args)
+                (error
+                 ;; Value-result cells may fail to create a result file after
+                 ;; a Python exception; display the captured traceback instead.
+                 (unless my/org-notebook--python-error-output
+                   (signal (car err) (cdr err)))))))
+        (if my/org-notebook--python-error-output
+            (progn
+              (setq my/org-notebook--execution-error t)
+              my/org-notebook--python-error-output)
+          result))))
+
+  (defun my/org-notebook--head ()
+    "Find the source cell at point, including its result region."
+    (unless (bound-and-true-p my/org-notebook-mode)
+      (user-error "Enable my/org-notebook-mode in this Org buffer first"))
+    (or (org-babel-where-is-src-block-head)
+        (save-excursion
+          (let ((origin (point)))
+            (condition-case nil
+                (progn
+                  (org-babel-previous-src-block)
+                  (let ((head (point))
+                        (result (org-babel-where-is-src-block-result)))
+                    (when (and result (<= result origin))
+                      (goto-char result)
+                      (when (<= origin (org-babel-result-end)) head))))
+              (user-error nil))))
+        (user-error "Place point in a code cell or its results")))
+
+  (defun my/org-notebook--cell-end (head)
+    "Return the end of the cell at HEAD, including its results."
+    (save-excursion
+      (goto-char head)
+      (let ((end (org-element-property :end (org-element-at-point)))
+            (result (org-babel-where-is-src-block-result)))
+        (when result
+          (goto-char result)
+          (setq end (max end (org-babel-result-end))))
+        end)))
+
+  (defun my/org-notebook--enter-cell ()
+    "Move from the current source block header to its first code line."
+    (org-fold-show-context 'org-goto)
+    (forward-line 1))
+
+  (defun my/org-notebook-run ()
+    "Execute the current cell without moving to another cell."
+    (interactive)
+    (let ((head (my/org-notebook--head))
+          (ran nil))
+      (setq my/org-notebook--execution-error nil)
+      (save-excursion
+        (goto-char head)
+        (let ((org-babel-after-execute-hook
+               (cons (lambda () (setq ran t)) org-babel-after-execute-hook)))
+          (org-babel-execute-src-block)))
+      (unless ran (user-error "Cell was not executed"))
+      (org-redisplay-inline-images)
+      (when my/org-notebook--execution-error
+        (user-error "Python cell failed; see traceback in #+RESULTS"))))
+
+  (defun my/org-notebook-next-cell ()
+    (interactive)
+    (goto-char (my/org-notebook--head))
+    (org-babel-next-src-block)
+    (my/org-notebook--enter-cell))
+
+  (defun my/org-notebook-previous-cell ()
+    (interactive)
+    (goto-char (my/org-notebook--head))
+    (org-babel-previous-src-block)
+    (my/org-notebook--enter-cell))
+
+  (defun my/org-notebook--insert-cell (above)
+    "Insert a Python cell ABOVE the current cell, or below its results."
+    (let ((head (my/org-notebook--head)))
+      (goto-char (if above head (my/org-notebook--cell-end head)))
+      (unless (bolp) (insert "\n"))
+      (insert "\n")
+      (let ((start (point)))
+        (insert "#+begin_src python\n\n#+end_src\n\n")
+        (goto-char start)
+        (my/org-notebook--enter-cell))))
+
+  (defun my/org-notebook-cell-above ()
+    (interactive)
+    (my/org-notebook--insert-cell t))
+
+  (defun my/org-notebook-cell-below ()
+    (interactive)
+    (my/org-notebook--insert-cell nil))
+
+  (defun my/org-notebook-new-cell ()
+    "Insert a Python cell at point, or immediately below the current cell."
+    (interactive)
+    (unless (bound-and-true-p my/org-notebook-mode)
+      (user-error "Not an Org notebook"))
+    (if (ignore-errors (my/org-notebook--head))
+        (my/org-notebook-cell-below)
+      (unless (bolp) (insert "\n"))
+      (insert "\n")
+      (let ((start (point)))
+        (insert "#+begin_src python\n\n#+end_src\n\n")
+        (goto-char start)
+        (my/org-notebook--enter-cell))))
+
+  (defun my/org-notebook-return ()
+    "Enter cell editing from notebook navigation; otherwise insert an Org newline."
+    (interactive)
+    (if (and (not (bound-and-true-p meow-insert-mode))
+             (ignore-errors (my/org-notebook--head)))
+        (my/org-notebook-edit-cell)
+      (org-return)))
+
+  (defun my/org-notebook-run-next ()
+    "Execute, then enter the next cell; append a Python cell at the end."
+    (interactive)
+    (let ((head (my/org-notebook--head)))
+      (my/org-notebook-run)
+      (goto-char head)
+      (if (save-excursion
+            (condition-case nil (progn (org-babel-next-src-block) t)
+              (user-error nil)))
+          (my/org-notebook-next-cell)
+        (my/org-notebook-cell-below))))
+
+  (defun my/org-notebook-edit-cell ()
+    (interactive)
+    (goto-char (my/org-notebook--head))
+    (org-edit-special))
+
+  (defun my/org-notebook-refontify (&rest _)
+    "Refresh native code highlighting after edited cells are written back to Org."
+    (when (bound-and-true-p my/org-notebook-mode)
+      (font-lock-flush)
+      (font-lock-ensure)))
+
+  (defun my/org-notebook-cell-edit-run ()
+    "Write the edited cell back and execute it in its Org Python session."
+    (interactive)
+    (org-edit-src-exit)
+    (my/org-notebook-run))
+
+  (defun my/org-notebook-cell-edit-escape ()
+    "Leave Meow insert state first; only then exit the cell editor."
+    (interactive)
+    (if (bound-and-true-p meow-insert-mode)
+        (meow-insert-exit)
+      (org-edit-src-exit)))
+
+  (define-minor-mode my/org-notebook-cell-edit-mode
+    "Notebook cell editor: Escape in normal state writes back and returns to Org."
+    :init-value nil
+    :lighter " Cell"
+    :keymap (let ((map (make-sparse-keymap)))
+              (define-key map (kbd "<escape>") #'my/org-notebook-cell-edit-escape)
+              (define-key map (kbd "C-c c c") #'my/org-notebook-cell-edit-run)
+              map)
+    (when my/org-notebook-cell-edit-mode
+      (setq-local emulation-mode-map-alists
+                  (cons 'my/org-notebook--cell-edit-emulation-alist
+                        (remq 'my/org-notebook--cell-edit-emulation-alist
+                              emulation-mode-map-alists)))))
+
+  (defvar my/org-notebook--cell-edit-emulation-alist
+    `((my/org-notebook-cell-edit-mode . ,my/org-notebook-cell-edit-mode-map)))
+
+  (defun my/org-notebook-python-edit-setup ()
+    "Give notebook Python edit buffers a virtual file identity and normal Python tooling."
+    (when (and (org-src-edit-buffer-p)
+               (derived-mode-p 'python-mode 'python-ts-mode)
+               (with-current-buffer (org-src-source-buffer)
+                 (bound-and-true-p my/org-notebook-mode)))
+      (let* ((source (org-src-source-buffer))
+             (directory (with-current-buffer source default-directory))
+             (identity (with-current-buffer source my/org-notebook--session))
+             (virtual-file
+              (expand-file-name
+               (format ".%s-cell-%d.py" identity (marker-position org-src--beg-marker))
+               directory)))
+        ;; Eglot needs a file URI for textDocument/didOpen.  This path is only
+        ;; a buffer identity; Org's write-contents-functions writes back to Org.
+        (setq-local buffer-file-name virtual-file
+                    buffer-file-truename virtual-file
+                    default-directory directory
+                    create-lockfiles nil
+                    buffer-auto-save-file-name nil
+                    org-src-window-setup 'current-window)
+        (my/org-notebook-cell-edit-mode 1)
+        (when (featurep 'meow)
+          (let ((leader (make-sparse-keymap)) (run-map (make-sparse-keymap)))
+            (set-keymap-parent leader (meow--get-leader-keymap))
+            (define-key run-map (kbd "c") #'my/org-notebook-cell-edit-run)
+            (define-key run-map (kbd "C-c") #'my/org-notebook-cell-edit-run)
+            (define-key leader (kbd "c") run-map)
+            (setq-local meow-keypad-leader-dispatch leader))
+          ;; Re-enabling the already active Meow state disables its own keymap.
+          ;; Only transition when needed, clearing any inconsistent old state.
+          (unless (meow-normal-mode-p)
+            (meow--disable-current-state)
+            (meow--switch-state 'normal)))
+        (require 'eglot)
+        (eglot-ensure))))
+
+  (defun my/org-notebook-clear-result ()
+    (interactive)
+    (save-excursion
+      (goto-char (my/org-notebook--head))
+      (org-babel-remove-result)))
+
+  (defun my/org-notebook-restart-session ()
+    "Stop this notebook's default Python session; next execution starts fresh."
+    (interactive)
+    (unless (bound-and-true-p my/org-notebook-mode)
+      (user-error "Not an Org notebook"))
+    (let* ((session (or (org-babel-python-session-buffer
+                         (intern my/org-notebook--session))
+                        (org-babel-python-session-buffer my/org-notebook--session)))
+           (buffer (and session (get-buffer session)))
+           (process (and buffer (get-buffer-process buffer))))
+      (unless (and process (process-live-p process))
+        (user-error "This notebook has no running Python session"))
+      (when (yes-or-no-p "Restart Python session and discard all variables? ")
+        (set-process-query-on-exit-flag process nil)
+        (delete-process process)
+        (let ((kill-buffer-query-functions nil)) (kill-buffer buffer))
+        (message "Python session stopped; next cell execution starts a fresh session"))))
+
+  (defconst my/org-notebook--commands
+    '(("r" . my/org-notebook-run) ("x" . my/org-notebook-run-next)
+      ("j" . my/org-notebook-next-cell) ("k" . my/org-notebook-previous-cell)
+      ("p" . my/org-notebook-new-cell)
+      ("a" . my/org-notebook-cell-above) ("b" . my/org-notebook-cell-below)
+      ("e" . my/org-notebook-edit-cell) ("c" . my/org-notebook-clear-result)
+      ("s" . my/org-notebook-restart-session)))
+
+  (defun my/org-notebook--meow-setup ()
+    "Install a notebook-only leader, preserving the surrounding Meow bindings."
+    (let ((leader (make-sparse-keymap)) (cells (make-sparse-keymap)))
+      (set-keymap-parent leader (meow--get-leader-keymap))
+      (dolist (binding my/org-notebook--commands)
+        (define-key cells (kbd (car binding)) (cdr binding))
+        (define-key cells (kbd (concat "C-" (car binding))) (cdr binding)))
+      (define-key leader (kbd "n") cells)
+      (setq-local meow-keypad-leader-dispatch leader)))
+
+  (define-minor-mode my/org-notebook-mode
+    "Opt-in Org notebook with Python cells, inline results and Meow shortcuts."
+    :init-value nil
+    :lighter " Notebook"
+    :keymap (let ((map (make-sparse-keymap)))
+              (define-key map (kbd "S-<return>") #'my/org-notebook-run-next)
+              (define-key map (kbd "C-<return>") #'my/org-notebook-run)
+              (define-key map (kbd "RET") #'my/org-notebook-return)
+              (define-key map (kbd "<return>") #'my/org-notebook-return)
+              (dolist (binding my/org-notebook--commands)
+                (define-key map (kbd (concat "C-c n " (car binding))) (cdr binding)))
+              map)
+    (if my/org-notebook-mode
+        (progn
+          (unless (derived-mode-p 'org-mode)
+            (setq my/org-notebook-mode nil)
+            (user-error "Notebook mode is only for Org buffers"))
+          (require 'ob-python)
+          (unless my/org-notebook--saved-locals
+            (setq my/org-notebook--saved-locals
+                  (mapcar (lambda (var)
+                            (list var (local-variable-p var)
+                                  (and (boundp var) (symbol-value var))))
+                          '(org-babel-default-header-args:python org-babel-python-command
+                            org-confirm-babel-evaluate org-src-fontify-natively org-src-tab-acts-natively
+                            org-edit-src-content-indentation org-src-lang-modes
+                            org-src-window-setup
+                            emulation-mode-map-alists meow-keypad-leader-dispatch))))
+          (setq my/org-notebook--session
+                (concat "org-notebook-"
+                        (substring (secure-hash 'sha1
+                                                (or buffer-file-truename
+                                                    buffer-file-name (buffer-name)))
+                                   0 12)))
+          (setq-local org-babel-default-header-args:python
+                      (copy-tree org-babel-default-header-args:python))
+          (dolist (arg `((:session . ,my/org-notebook--session)
+                         (:results . "output replace") (:exports . "both")))
+            (setf (alist-get (car arg) org-babel-default-header-args:python) (cdr arg)))
+          (setq-local org-babel-python-command
+                      (if (eq system-type 'windows-nt) "python" "python3")
+                      org-confirm-babel-evaluate nil
+                      org-src-fontify-natively t
+                      org-src-tab-acts-natively t
+                      org-edit-src-content-indentation 0
+                      org-src-window-setup 'current-window
+                      org-src-lang-modes
+                      (cons '("python" . python-ts)
+                            (assoc-delete-all "python" (copy-tree org-src-lang-modes))))
+          (when (featurep 'meow) (my/org-notebook--meow-setup))
+          (setq-local emulation-mode-map-alists
+                      (cons 'my/org-notebook--emulation-alist
+                            (remq 'my/org-notebook--emulation-alist
+                                  emulation-mode-map-alists))))
+      (dolist (saved my/org-notebook--saved-locals)
+        (if (nth 1 saved)
+            (set (make-local-variable (car saved)) (nth 2 saved))
+          (kill-local-variable (car saved))))
+      (setq my/org-notebook--saved-locals nil)))
+
+  (defvar my/org-notebook--emulation-alist
+    `((my/org-notebook-mode . ,my/org-notebook-mode-map)))
+
+  (defun my/org-notebook-detect ()
+    "Enable notebook behavior only for Org files tagged :notebook:."
+    (when (seq-some (lambda (tags) (string-match-p ":notebook:" tags))
+                    (cdr (assoc "FILETAGS" (org-collect-keywords '("FILETAGS")))))
+      (my/org-notebook-mode 1)))
+
+  (defun my/org-notebook-new (file)
+    "Create a new Python notebook FILE without overwriting an existing document."
+    (interactive "FNew Org notebook: ")
+    (unless (string-equal (file-name-extension file) "org")
+      (setq file (concat file ".org")))
+    (when (file-exists-p file) (user-error "File already exists: %s" file))
+    (find-file file)
+    (unless (= (buffer-size) 0) (user-error "Notebook buffer is not empty"))
+    (insert "#+title: " (file-name-base file)
+            "\n#+filetags: :notebook:\n#+startup: showall inlineimages\n\n"
+            "* Notes\n\n* Code\n\n#+begin_src python\nprint(\"Hello, notebook!\")\n#+end_src\n")
+    (my/org-notebook-mode 1)
+    (goto-char (point-min))
+    (org-babel-next-src-block)
+    (my/org-notebook--enter-cell))
+
+  (use-package org
+    :ensure nil
+    :hook ((org-mode . visual-line-mode)
+           (org-mode . my/org-notebook-detect)
+           (org-src-mode . my/org-notebook-python-edit-setup))
+    :config
+    (require 'ob-python)
+    (advice-add 'org-babel-python-send-string :around
+                #'my/org-notebook-python-send-with-errors)
+    (advice-add 'org-babel-python-evaluate-session :around
+                #'my/org-notebook-python-evaluate-with-errors)
+    ;; Both Escape and C-c ' call this entrypoint; refresh only notebooks.
+    (advice-add 'org-edit-src-exit :after #'my/org-notebook-refontify)
+    (org-babel-do-load-languages
+     'org-babel-load-languages
+     (cons '(python . t) (assq-delete-all 'python (copy-tree org-babel-load-languages)))))
+
+  (with-eval-after-load 'meow
+    (dolist (buffer (buffer-list))
+      (with-current-buffer buffer
+        (when (bound-and-true-p my/org-notebook-mode)
+          (my/org-notebook--meow-setup)))))
 #+end_src
 
 * 模态编辑 (Meow)
