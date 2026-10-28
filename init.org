@@ -4,6 +4,119 @@
 #+PROPERTY: header-args:emacs-lisp :tangle init.el :results silent
 #+STARTUP: overview
 
+* 新增功能快捷键说明书
+:PROPERTIES:
+:VISIBILITY: children
+:END:
+
+这里集中记录本配置新增的操作；下方各配置章节保留实现与详细说明。
+
+- =SPC= 是空格键；=C-c= 表示 Ctrl+c；=M-x= 表示 Alt+x（macOS 取决于 Option/Meta 设置）。
+- 表中的 =SPC …= 在 Meow *普通模式* 使用；对应 =C-c …= 在 *插入/编辑模式* 使用。
+  这些是对应语言或 Notebook 的局部绑定，不是所有 buffer 都有的全局快捷键。
+- =↑= / =↓= 指方向键，不是字母。组合键按顺序输入，不要把所有字母同时按下。
+
+** JSON / HTML / Python：结构导航与阅读
+
+适用于 =json-ts-mode=、=html-ts-mode=、=python-mode= / =python-ts-mode=，
+包括 Notebook 的 Python cell 编辑 buffer。
+
+| 普通模式 | 插入模式 | 功能 |
+|----------+----------+------|
+| =SPC ↑= | =C-c ↑= | 跳到父级结构 |
+| =SPC ↓= | =C-c ↓= | 进入子级结构 |
+| =SPC s s= | =C-c s s= | 当前窗口显示全文结构树，不限制为光标附近几层 |
+| =SPC s p= | =C-c s p= | 当前窗口显示光标处 → 全部父级 → 文件根节点的关系链 |
+
+父级链逐层显示名称、语法节点类型、起始行列及可用的父节点字段名，
+不省略中间语法层。全文树与父级链都是独立只读视图，不修改源文件。
+
+| 只读结构视图中的键 | 功能 |
+|--------------------+------|
+| =q= | 关闭视图，返回源 buffer 的原光标位置 |
+| =s= | 导出当前视图为原文件旁的 =文件名.structure.md=，已有文件先确认覆盖 |
+
+结构视图是文本列表，不是点击即可跳转的交互大纲。由 HTML 内嵌 JSON
+阅读视图进入结构视图时，导出位置仍跟随原 HTML 文件。
+
+** HTML / JSON：全文格式化与内嵌 JSON
+
+| 适用范围 | 普通模式 | 插入模式 | 功能 |
+|----------+----------+----------+------|
+| HTML / JSON | =SPC f f= | =C-c f f= | 使用 Prettier 格式化全文 |
+| 仅 HTML | =SPC j j= | =C-c j j= | 当前窗口打开内嵌 JSON 的独立只读阅读视图 |
+
+- 格式化始终处理全文，即使存在选区或 narrowing；不自动保存，支持撤销，失败保留原文。
+- 依赖 PATH 中的 =prettier=：Nix 系统由 flakes 安装，Windows 需手动安装。
+- 内嵌 JSON 有多段时每次选择要查看的 script；原 HTML 不变，不创建 JSON 文件。
+- JSON 阅读视图可以继续使用结构导航、全文树和父级链；按 =q= 返回 HTML。
+  它保持只读，不能直接用格式化指令改写快照或原 HTML。
+
+** Python 文件：运行与终端输出
+
+| 位置 | 普通模式 | 插入模式 | 功能 |
+|------+----------+----------+------|
+| 本地 =.py= 文件 | =SPC c c= | =C-c c c= | 保存并运行当前文件，打开并聚焦右侧 Ghostel 输出窗口 |
+
+在该 Python 输出窗口中，*单次* =C-c= 即终止会话并关闭输出 buffer / 窗口；
+=C-x k= 关闭输出 buffer 时也会清理进程。程序自然结束后保留输出，方便阅读。
+这些关闭行为仅限此运行器创建的终端，不改变普通 Ghostel。
+Notebook 的 cell 编辑 buffer 使用下面的 cell 执行行为，不运行虚拟 =.py= 文件。
+
+** Org Python Notebook：创建、执行与导航
+
+先用 =M-x my/org-notebook-new= 新建 Notebook，或在已有 Org 文件中执行
+=M-x my/org-notebook-mode= 切换。文件级 =:notebook:= 标签可在重开时自动启用。
+以下按键仅用于启用 Notebook 模式的 *Org buffer*，普通 Org 与本配置文件不受影响。
+
+| 普通模式 | 插入模式 | 功能 |
+|----------+----------+------|
+| =SPC n r= | =C-c n r= | 执行当前 cell，停留原处 |
+| =SPC n x= | =C-c n x= | 执行并进入下一 cell，最后一个 cell 后自动新增 |
+| =SPC n j= | =C-c n j= | 下一 cell |
+| =SPC n k= | =C-c n k= | 上一 cell |
+| =SPC n p= | =C-c n p= | 在正文光标处插入 Python cell；已在 cell 内则紧接其后新增 |
+| =SPC n a= | =C-c n a= | 当前 cell 上方新增 Python cell |
+| =SPC n b= | =C-c n b= | 当前 cell 下方新增 Python cell |
+| =SPC n e= | =C-c n e= | 当前窗口进入 Python cell 编辑 buffer |
+| =SPC n c= | =C-c n c= | 清除当前 cell 结果 |
+| =SPC n s= | =C-c n s= | 确认后重启默认 Python 会话，清空共享变量 |
+
+另有 =Ctrl+Enter= 执行并停留、=Shift+Enter= 执行后进入下一 cell；终端
+若不能区分这两种组合键，就使用表中的 =n r= / =n x=。普通模式在 cell 上
+直接按 =Enter= 也能进入 Python 编辑；插入模式的 Enter 仍用于 Org 换行。
+
+Notebook 每个文件默认一个 Python 会话，cell 间共享变量。输出、stderr
+及 Python 异常显示在原地 =#+RESULTS= 中，重跑替换旧结果；执行失败时
+不自动跳转或新增 cell。Notebook 内执行免确认，仅对可信文件启用。
+
+** Notebook：Python cell 编辑与返回
+
+进入 cell 编辑后默认是 Meow 普通模式；按 =i= 开始输入。它使用 Python
+语法高亮、补全和 Eglot/basedpyright；虚拟 =.py= 身份不会创建真实 Python 文件。
+
+| 所处状态 | 操作 | 结果 |
+|----------+------+------|
+| cell 编辑，插入模式 | =Esc= | 先回到 Meow 普通模式，不退出编辑 |
+| cell 编辑，普通模式 | =Esc= | 将代码写回 Org，退出 cell 编辑 |
+| cell 编辑，普通模式 | =SPC c c= | 写回并返回 Org，执行该 cell |
+| cell 编辑，插入模式 | =C-c c c= | 写回并返回 Org，执行该 cell |
+
+** Meow：选词与快速加双引号
+
+| 普通模式中的键 | 功能 |
+|----------------+------|
+| =w= | 选中光标下的单词 |
+| =W=（Shift+w） | 选中光标下的符号，例如完整的 =interval_id=，包括下划线 |
+| ="= | 给当前选区两端加双引号；没有选区则插入 =""= |
+| =i= | 进入插入模式 |
+| =Esc=（插入模式中） | 返回普通模式；Notebook cell 编辑中的两阶段退出见上表 |
+
+例如选中 =interval_id= 后按 ="=，得到 ="interval_id"=；选中 =100:90=
+后按 ="=，得到 ="100:90"=。双引号绑定不改变插入模式原有的自动配对行为。
+=w= / =W= 按语言语法识别边界，*不等于严格按两端空白分隔*；例如
+=foo.bar=、=100:90= 不保证由 =W= 一次完整选中。目前未添加空白分隔选取键。
+
 #+begin_src emacs-lisp
 ;;; init.el --- tangled from init.org -*- lexical-binding: t; -*-
 #+end_src
@@ -965,6 +1078,8 @@ Python 异常及 stderr 显示在当前 cell 的 =#+RESULTS= 中；失败时不�
 
 Meow 是一个轻量的模态编辑框架，类似 Vim 但更贴合 Emacs 哲学。
 使用 QWERTY 布局，hjkl 移动，支持选择优先 (selection-first) 的编辑模式。
+普通模式选中文本后按 ="=，用内置 =insert-pair= 包上双引号；不影响插入
+模式的自动配对。未选中时按 ="= 则插入一对空引号。
 
 #+begin_src emacs-lisp
 (use-package meow
@@ -1009,6 +1124,7 @@ Meow 是一个轻量的模态编辑框架，类似 Vim 但更贴合 Emacs 哲学
      '("1" . meow-expand-1)
      '("-" . negative-argument)
      '(";" . meow-reverse)
+     '("\"" . insert-pair)
      '("," . meow-inner-of-thing)
      '("." . meow-bounds-of-thing)
      '("[" . meow-beginning-of-thing)
@@ -1077,22 +1193,32 @@ Meow 普通模式下用 =SPC c c=，编辑模式下用 =C-c c c=；这些绑定�
 运行结束保留输出；输出窗口中单次 =C-c= 终止进程并关闭 buffer / 窗口。
 =C-x k= 也会清理进程和窗口，不改变其它 Ghostel 的退出行为。
 
-JSON 默认使用 =json-ts-mode=。JSON 和 Python 均启用 Combobulate，
+JSON 默认使用 =json-ts-mode=。JSON、HTML 和 Python 均启用 Combobulate，
 Meow 普通模式下 =SPC ↑= 跳父级、=SPC ↓= 进入子级；编辑模式下对应
-=C-c ↑= / =C-c ↓=。仅这两类 buffer 使用这些键，不改全局 leader。
+=C-c ↑= / =C-c ↓=。仅这三类 buffer 使用这些键，不改全局 leader。
 Combobulate 为纯 Elisp，由 Elpaca 安装；tree-sitter 沿用现有语法库配置。
-JSON / Python 中 =SPC s s=（编辑模式 =C-c s s=）在当前窗口显示整个
+JSON / HTML / Python 中 =SPC s s=（编辑模式 =C-c s s=）在当前窗口显示整个
 buffer 的 Combobulate 结构树（不截断为光标附近的几层）；=q= 返回。
 这是结构列表，不是可以点击跳转的大纲。结构视图中按 =s= 导出 Markdown，
 默认保存到原文件同目录的 =文件名.structure.md=（如 =1.structure.md=），
 不询问路径；已有文件会确认覆盖。完整树放在 UTF-8 代码块中保留对齐。
 生成视图时记录原文件路径，关闭中间阅读 buffer 后仍可导出。
 
+这三类 buffer 另有 =SPC s p=（编辑模式 =C-c s p=）：在当前窗口列出
+光标所在语法节点到文件根节点的完整父级链，包含名称、节点类型、起始行列
+及可用的父节点字段名，不省略中间语法层。空白处取真正包含该位置的节点，
+不跳到后面的单词；=q= 返回原 buffer 的原光标位置。
+
 HTML 默认使用 =html-ts-mode=。仅 HTML buffer 中的 =SPC j j=（编辑模式
 =C-c j j=）在当前窗口打开内嵌 JSON 的独立只读 buffer，不创建文件，
 不修改原 HTML。多段 JSON 时每次都选择 =application/json= 或
 =application/ld+json= 等 JSON script。阅读 buffer 使用 =json-ts-mode= 和
 Combobulate，可用 =SPC ↑= / =SPC ↓= 导航；=q= 关闭并返回 HTML。
+
+HTML / JSON 中 =SPC f f=（编辑模式 =C-c f f=）使用 Prettier 格式化全文，
+即使当前有选区或 narrowing 也处理整个文件。不自动保存，支持撤销；格式化
+失败不修改原文。只读 JSON 快照仍保持只读。Prettier 通过 flakes 安装，
+Windows 需手动安装并放入 PATH。
 
 =typst-ts-mode= 把 =define-compilation-mode= 写进了 autoloads，Elpaca 加载
 该文件时 =compile= 往往还没就绪。关掉它的 autoloads，打开 =.typ= 再加载。
@@ -1112,12 +1238,48 @@ Combobulate，可用 =SPC ↑= / =SPC ↓= 导航；=q= 关闭并返回 HTML。
     :ensure (:autoloads nil)
     :mode "\\.typ\\'")
 
+  (defun my/web-format-buffer ()
+    "Format the entire HTML/JSON buffer with Prettier, without saving it."
+    (interactive)
+    (barf-if-buffer-read-only)
+    (let* ((parser (cond ((derived-mode-p 'html-ts-mode) "html")
+                         ((derived-mode-p 'json-ts-mode) "json")
+                         (t (user-error "Use this command in an HTML or JSON buffer"))))
+           (program (or (executable-find "prettier")
+                        (user-error "Prettier is not on PATH; install it via flakes (Windows: install manually)")))
+           (filename (or buffer-file-name
+                         (expand-file-name (concat "untitled." parser) default-directory)))
+           (output (generate-new-buffer " *prettier-output*"))
+           (stderr (make-temp-file "emacs-prettier-"))
+           (coding-system-for-read 'utf-8-unix)
+           (coding-system-for-write 'utf-8-unix))
+      (unwind-protect
+          (save-restriction
+            (widen)
+            (let ((status (call-process-region
+                           (point-min) (point-max) program nil (list output stderr) nil
+                           "--parser" parser "--stdin-filepath" filename)))
+              (unless (and (integerp status) (zerop status))
+                (user-error "Prettier failed (%s): %s" status
+                            (string-trim
+                             (with-temp-buffer (insert-file-contents stderr) (buffer-string)))))
+              (atomic-change-group
+                (replace-buffer-contents output))
+              (message "Formatted entire %s buffer (not saved)" parser)))
+        (when (buffer-live-p output) (kill-buffer output))
+        (delete-file stderr))))
+
   ;;; HTML: use the existing automatic tree-sitter grammar installation.
   (use-package html-ts-mode
     :ensure nil
     :mode "\\.html?\\'"
     :bind (:map html-ts-mode-map
-                ("C-c j j" . my/html-view-json)))
+                ("C-c j j" . my/html-view-json)
+                ("C-c <up>" . combobulate-navigate-up)
+                ("C-c <down>" . combobulate-navigate-down)
+                ("C-c s s" . my/combobulate-show-structure)
+                ("C-c s p" . my/combobulate-show-ancestors)
+                ("C-c f f" . my/web-format-buffer)))
 
   (defun my/html-meow-setup ()
     "Bind SPC j j only in this HTML buffer."
@@ -1259,7 +1421,9 @@ Always prompt if multiple scripts exist, regardless of point.  q returns
     :bind (:map json-ts-mode-map
                 ("C-c <up>" . combobulate-navigate-up)
                 ("C-c <down>" . combobulate-navigate-down)
-                ("C-c s s" . my/combobulate-show-structure)))
+                ("C-c s s" . my/combobulate-show-structure)
+                ("C-c s p" . my/combobulate-show-ancestors)
+                ("C-c f f" . my/web-format-buffer)))
 
   (defun my/combobulate-enable ()
     "Enable Combobulate explicitly in supported JSON and Python buffers."
@@ -1271,6 +1435,7 @@ Always prompt if multiple scripts exist, regardless of point.  q returns
              :files (:defaults) :autoloads nil)
     :commands (combobulate-mode combobulate-navigate-up combobulate-navigate-down)
     :hook ((json-ts-mode . my/combobulate-enable)
+           (html-ts-mode . my/combobulate-enable)
            (python-mode . my/combobulate-enable)
            (python-ts-mode . my/combobulate-enable)))
 
@@ -1278,6 +1443,8 @@ Always prompt if multiple scripts exist, regardless of point.  q returns
     "Source buffer for this read-only Combobulate structure view.")
   (defvar-local my/combobulate-structure-origin-file nil
     "Original file path captured when this structure view was created.")
+  (defvar-local my/combobulate-structure-source-point nil
+    "Marker for the source position to restore when leaving a structure view.")
 
   (defun my/combobulate-original-file (buffer)
     "Follow JSON/structure source links from BUFFER to its original file."
@@ -1325,10 +1492,15 @@ Always prompt if multiple scripts exist, regardless of point.  q returns
     "Close the structure view and return to its source buffer."
     (interactive)
     (let ((source my/combobulate-structure-source)
+          (position my/combobulate-structure-source-point)
           (view (current-buffer)))
       (if (buffer-live-p source)
-          (switch-to-buffer source)
+          (progn
+            (switch-to-buffer source)
+            (when (and (markerp position) (eq (marker-buffer position) source))
+              (goto-char position)))
         (switch-to-prev-buffer))
+      (when (markerp position) (set-marker position nil))
       (kill-buffer view)))
 
   (define-minor-mode my/combobulate-structure-view-mode
@@ -1348,24 +1520,12 @@ Always prompt if multiple scripts exist, regardless of point.  q returns
   (defvar my/combobulate-structure-emulation-alist
     `((my/combobulate-structure-view-mode . ,my/combobulate-structure-view-mode-map)))
 
-  (defun my/combobulate-show-structure ()
-    "Show the full buffer's navigable structure with Combobulate's renderer."
-    (interactive)
-    (unless (derived-mode-p 'json-ts-mode 'python-mode 'python-ts-mode)
-      (user-error "Use this command in a JSON or Python buffer"))
-    (require 'combobulate)
-    (unless (combobulate-read minor-mode)
-      (combobulate-mode))
+  (defun my/combobulate-display-structure (text &optional title)
+    "Show TEXT read-only in this window, retaining its source and position."
     (let* ((source (current-buffer))
+           (position (point-marker))
            (origin-file (my/combobulate-original-file source))
-           (text (save-excursion
-                   (goto-char (point-min))
-                   (with-navigation-nodes
-                       (:procedures (combobulate-read procedures-hierarchy))
-                     (combobulate-display-draw-tree-1
-                      (combobulate-display-make-tree
-                       (combobulate-root-node) most-positive-fixnum)))))
-           (view (generate-new-buffer (format "*Structure: %s*" (buffer-name)))))
+           (view (generate-new-buffer (format "*%s: %s*" (or title "Structure") (buffer-name)))))
       (condition-case err
           (progn
             (with-current-buffer view
@@ -1373,6 +1533,7 @@ Always prompt if multiple scripts exist, regardless of point.  q returns
               (special-mode)
               (setq-local my/combobulate-structure-source source
                           my/combobulate-structure-origin-file origin-file
+                          my/combobulate-structure-source-point position
                           buffer-offer-save nil)
               (my/combobulate-structure-view-mode 1)
               (set-buffer-modified-p nil)
@@ -1380,10 +1541,72 @@ Always prompt if multiple scripts exist, regardless of point.  q returns
             (switch-to-buffer view))
         ((error quit)
          (when (buffer-live-p view) (kill-buffer view))
+         (set-marker position nil)
          (signal (car err) (cdr err))))))
 
+  (defun my/combobulate-show-structure ()
+    "Show the full buffer's navigable structure with Combobulate's renderer."
+    (interactive)
+    (unless (derived-mode-p 'json-ts-mode 'html-ts-mode 'python-mode 'python-ts-mode)
+      (user-error "Use this command in a JSON, HTML or Python buffer"))
+    (require 'combobulate)
+    (unless (combobulate-read minor-mode) (combobulate-mode))
+    (my/combobulate-display-structure
+     (save-excursion
+       (goto-char (point-min))
+       (with-navigation-nodes
+           (:procedures (combobulate-read procedures-hierarchy))
+         (combobulate-display-draw-tree-1
+          (combobulate-display-make-tree (combobulate-root-node) most-positive-fixnum))))))
+
+  (defun my/combobulate-ancestor-text ()
+    "Describe every syntax node from point to the main parser's root."
+    (save-restriction
+      (widen)
+      (let* ((position (point))
+             (root (combobulate-root-node))
+             (node (or (and (< position (treesit-node-end root))
+                            (treesit-node-descendant-for-range root position (1+ position)))
+                       root))
+             (depth 0)
+             lines)
+        (while node
+          (let* ((type (treesit-node-type node))
+                 (label (substring-no-properties
+                         (or (combobulate-pretty-print-node node) type)))
+                 (field (treesit-node-field-name node))
+                 (leaf (when (zerop (treesit-node-child-count node))
+                         (replace-regexp-in-string
+                          "[[:space:]\n\r]+" " "
+                          (buffer-substring-no-properties
+                           (treesit-node-start node)
+                           (min (treesit-node-end node) (+ (treesit-node-start node) 80)))))))
+            (push (format "%s%d. %s%s  [%s]  L%d:%d%s"
+                          (if (zerop depth) "" "↑ ") depth
+                          (truncate-string-to-width label 90 nil nil "…")
+                          (if (and leaf (not (string-empty-p leaf)) (not (equal label leaf)))
+                              (concat " = " leaf) "")
+                          type
+                          (line-number-at-pos (treesit-node-start node) t)
+                          (save-excursion (goto-char (treesit-node-start node)) (current-column))
+                          (if field (concat "  (parent field: " field ")") ""))
+                  lines))
+          (setq node (treesit-node-parent node) depth (1+ depth)))
+        (format "Ancestor chain: %s\nPoint: L%d:%d\nCurrent node → every parent → root (columns start at 0)\n\n%s"
+                (buffer-name) (line-number-at-pos position t) (current-column)
+                (mapconcat #'identity (nreverse lines) "\n")))))
+
+  (defun my/combobulate-show-ancestors ()
+    "Show the complete syntax ancestry at point in this window; q returns."
+    (interactive)
+    (unless (derived-mode-p 'json-ts-mode 'html-ts-mode 'python-mode 'python-ts-mode)
+      (user-error "Use this command in a JSON, HTML or Python buffer"))
+    (require 'combobulate)
+    (unless (combobulate-read minor-mode) (combobulate-mode))
+    (my/combobulate-display-structure (my/combobulate-ancestor-text) "Ancestors"))
+
   (defun my/combobulate-meow-setup ()
-    "Add structural arrows and SPC s s to this buffer's Meow leader only."
+    "Add local structural keys, and HTML/JSON whole-buffer formatting."
     (let ((leader (make-sparse-keymap))
           (structure-map (make-sparse-keymap)))
       (set-keymap-parent leader (meow--get-leader-keymap))
@@ -1391,11 +1614,19 @@ Always prompt if multiple scripts exist, regardless of point.  q returns
       (define-key leader (kbd "<down>") #'combobulate-navigate-down)
       (define-key structure-map (kbd "s") #'my/combobulate-show-structure)
       (define-key structure-map (kbd "C-s") #'my/combobulate-show-structure)
+      (define-key structure-map (kbd "p") #'my/combobulate-show-ancestors)
+      (define-key structure-map (kbd "C-p") #'my/combobulate-show-ancestors)
       (define-key leader (kbd "s") structure-map)
+      (when (derived-mode-p 'html-ts-mode 'json-ts-mode)
+        (let ((format-map (make-sparse-keymap)))
+          (define-key format-map (kbd "f") #'my/web-format-buffer)
+          (define-key format-map (kbd "C-f") #'my/web-format-buffer)
+          (define-key leader (kbd "f") format-map)))
       (setq-local meow-keypad-leader-dispatch leader)))
 
   (with-eval-after-load 'meow
     (add-hook 'json-ts-mode-hook #'my/combobulate-meow-setup)
+    (add-hook 'html-ts-mode-hook #'my/combobulate-meow-setup)
     (add-hook 'python-mode-hook #'my/combobulate-meow-setup)
     (add-hook 'python-ts-mode-hook #'my/combobulate-meow-setup))
 
@@ -1409,11 +1640,13 @@ Always prompt if multiple scripts exist, regardless of point.  q returns
                 ("C-c <up>" . combobulate-navigate-up)
                 ("C-c <down>" . combobulate-navigate-down)
                 ("C-c s s" . my/combobulate-show-structure)
+                ("C-c s p" . my/combobulate-show-ancestors)
            :map python-ts-mode-map
                 ("C-c c c" . my/python-run-ghostel)
                 ("C-c <up>" . combobulate-navigate-up)
                 ("C-c <down>" . combobulate-navigate-down)
-                ("C-c s s" . my/combobulate-show-structure)))
+                ("C-c s s" . my/combobulate-show-structure)
+                ("C-c s p" . my/combobulate-show-ancestors)))
 
   (use-package eglot
     :ensure nil
