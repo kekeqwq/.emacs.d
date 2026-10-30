@@ -26,15 +26,32 @@
 | =SPC ↑= | =C-c ↑= | 跳到父级结构 |
 | =SPC ↓= | =C-c ↓= | 进入子级结构 |
 | =SPC s s= | =C-c s s= | 当前窗口显示全文结构树，不限制为光标附近几层 |
-| =SPC s p= | =C-c s p= | 当前窗口显示光标处 → 全部父级 → 文件根节点的关系链 |
+| =SPC s p= | =C-c s p= | JSON：嵌套方框＋箭头图；HTML/Python：完整父级链 |
 
-父级链逐层显示名称、语法节点类型、起始行列及可用的父节点字段名，
-不省略中间语法层。全文树与父级链都是独立只读视图，不修改源文件。
+JSON 中默认显示 SVG 关系图：顶部居中显示源 HTML 文件与 script 标签；
+每层保留 =["key"]= / =[14]= 方括号写法，外框标明字典/列表及项数，内框显示
+少量真实子项，高亮继续通向当前值的子项，并用箭头连接各层。列表显示当前索引
+附近的元素，字典只展示少量子项，不展开整个大 JSON。点击方框或子项跳回源 JSON，
+可从中间层继续探索；点击顶部标签回原 HTML。终端不支持 SVG 时用文字方框回退。
+
+长键只在图上缩略，完整内容在下方说明或鼠标提示里；即使键本身是 JSON 字符串，
+也不把它误画成实际字典层级。=Tab= 选择下方节点链接，=Enter= 跳转；=g= 按当前
+窗口宽度重排。默认不再铺 Python 代码，=v= 才显示可选代码页，=g= 返回图示。
+旧的表达式/网页解析/本地验证复制功能仍保留，但不是默认阅读内容。
+
+HTML/Python 中仍显示名称、语法节点类型、起始行列和可用字段名，不省略
+中间语法层；JSON 加 =C-u= 前缀也可查看这种原始语法链。所有视图独立只读，
+=q= 返回原光标位置，不修改源文件。JSON 重复键覆盖的旧值会拒绝生成误导路径。
 
 | 只读结构视图中的键 | 功能 |
 |--------------------+------|
 | =q= | 关闭视图，返回源 buffer 的原光标位置 |
-| =s= | 导出当前视图为原文件旁的 =文件名.structure.md=，已有文件先确认覆盖 |
+| =s= | JSON 图导出 =文件名.path.svg=；其他结构视图导出 =文件名.structure.md=，覆盖前确认 |
+| =v= / =g=（JSON 图） | 查看可选代码页 / 返回图并按窗口重排 |
+| =y=（JSON 取值视图） | 复制完整的 =data[…]= 表达式 |
+| =p=（JSON 取值视图） | 复制 =print(data[…])= |
+| =c=（JSON 取值视图） | 复制网页解析代码，包含 BeautifulSoup、script 选择、json.loads 和 print；需已有 response |
+| =l=（JSON 取值视图） | 复制读取原本地文件并打印值的完整代码 |
 
 结构视图是文本列表，不是点击即可跳转的交互大纲。由 HTML 内嵌 JSON
 阅读视图进入结构视图时，导出位置仍跟随原 HTML 文件。
@@ -46,7 +63,12 @@
 | HTML / JSON | =SPC f f= | =C-c f f= | 使用 Prettier 格式化全文 |
 | 仅 HTML | =SPC j j= | =C-c j j= | 当前窗口打开内嵌 JSON 的独立只读阅读视图 |
 
-- 格式化始终处理全文，即使存在选区或 narrowing；不自动保存，支持撤销，失败保留原文。
+- 格式化在后台处理全文，即使存在选区或 narrowing；不自动保存，支持撤销，失败保留原文。
+  期间若编辑了缓冲区，结果不会覆盖新编辑，需重新执行；再次调用会取消旧任务并重跑。
+  可用 =M-x my/web-format-cancel= 取消，失败详情在 =*Prettier errors*=。
+- 大于 256 KiB 或有超过 4000 字符长行的 HTML/JSON 使用轻量显示：关闭缩进线、
+  彩虹括号及 Combobulate 额外高亮，长行横向滚动，保留原文、基础语法色和结构导航。
+  格式化不再无限时逐字符 diff，也不强制全文件立即高亮。阈值见 =my/web-large-buffer-threshold=。
 - 依赖 PATH 中的 =prettier=：Nix 系统由 flakes 安装，Windows 需手动安装。
 - 内嵌 JSON 有多段时每次选择要查看的 script；原 HTML 不变，不创建 JSON 文件。
 - JSON 阅读视图可以继续使用结构导航、全文树和父级链；按 =q= 返回 HTML。
@@ -62,6 +84,9 @@
 =C-x k= 关闭输出 buffer 时也会清理进程。程序自然结束后保留输出，方便阅读。
 这些关闭行为仅限此运行器创建的终端，不改变普通 Ghostel。
 Notebook 的 cell 编辑 buffer 使用下面的 cell 执行行为，不运行虚拟 =.py= 文件。
+Python 的 Eglot 参数补全确认后，~params=~ 会插入为 ~params =~，并在
+等号后保留一个空格，光标在该空格后；手动输入保持原样，不改其他语言，
+也不批量重排已有代码。
 
 ** Org Python Notebook：创建、执行与导航
 
@@ -90,6 +115,26 @@ Notebook 每个文件默认一个 Python 会话，cell 间共享变量。输出�
 及 Python 异常显示在原地 =#+RESULTS= 中，重跑替换旧结果；执行失败时
 不自动跳转或新增 cell。Notebook 内执行免确认，仅对可信文件启用。
 
+多线程 cell 会自动等待该 cell 新建的非 daemon 线程（包括它们创建的子线程）
+结束后才完成结果收集。保留 Python 原始的 stdout/stderr 写入顺序，不对
+=print= 加锁、不缓存重排、不按线程分组；允许线程自然交错、同一行内容穿插。
+工作线程抛出的异常也显示在结果中，并阻止自动进入下一 cell。
+不设等待超时；需要停止时按 =C-g=，会结束当前 Notebook 的 Python 会话、
+清空变量，下一次执行自动启动新会话，避免旧线程继续输出并干扰后续 cell。
+=daemon=True= 的后台线程不等待，其迟到的常规文本输出不追加到后续 cell。
+线程池请使用 =with ThreadPoolExecutor(...) as pool:= 或显式 =shutdown()=，
+否则空闲但未关闭的非 daemon 工作线程也会使 cell 保持执行中。
+
+多进程也自动等待本 cell 启动的非 daemon 子进程退出，不改变系统默认的
+=spawn= / =forkserver= 启动方式。worker 函数及所需导入放在同一个 cell
+（或独立可导入的 Python 模块），启动进程/创建进程池的代码放在
+~if __name__ == '__main__':~ 内；=Pool= / =ProcessPoolExecutor= 使用 =with= 关闭。
+子进程原始 stdout/stderr 就地收集，不排序；异常和非零退出码会让 cell 失败。
+跨 cell 定义的 =__main__= worker 不会被偷偷重放或序列化：请移到当前 cell
+或可导入模块；父进程共享的 Notebook 变量也不是子进程的共享内存。
+后台 daemon 子进程不保证结果归属，长驻后台程序建议通过 =.py= 终端运行。
+=C-g= 会停止本次 Python 会话及其普通子进程，变量清空，下一次执行重建。
+
 ** Notebook：Python cell 编辑与返回
 
 进入 cell 编辑后默认是 Meow 普通模式；按 =i= 开始输入。它使用 Python
@@ -101,6 +146,44 @@ Notebook 每个文件默认一个 Python 会话，cell 间共享变量。输出�
 | cell 编辑，普通模式 | =Esc= | 将代码写回 Org，退出 cell 编辑 |
 | cell 编辑，普通模式 | =SPC c c= | 写回并返回 Org，执行该 cell |
 | cell 编辑，插入模式 | =C-c c c= | 写回并返回 Org，执行该 cell |
+
+** Python：代码片段（Tempel）
+
+在 Python 文件或 Notebook 的 *Python cell 编辑 buffer* 中，插入模式输入
+片段名后按 =Tab= 展开；也可从 Corfu 补全菜单选择标为片段的候选。
+=Tab= 跳下一字段，=Shift+Tab= 跳上一字段，=M-Enter= 结束片段编辑。
+没有片段可展开时，Tab 仍用于原来的缩进/补全。=M-x tempel-insert= 可列出片段。
+
+| 片段名 | 展开内容 |
+|--------+----------|
+| =main= | ~if __name__ == '__main__':~，光标进入下一行缩进处 |
+| =def= / =adef= | 普通 / async 函数，依次填写函数名、参数和函数体 |
+| =class= / =classb= | 类 / 带父类的类 |
+| =for= / =fori= | 遍历可迭代对象 / 遍历 range |
+| =if= / =elif= / =while= | 条件、分支和循环 |
+| =try= | try / except，填写异常类型、变量和处理代码 |
+| =with= | with 上下文管理器 |
+| =pr= | print 调用 |
+| =imp= / =from= | import / from … import … |
+| =ret= / =raise= | return / raise |
+
+自动片段候选只在语句起始、行尾的缩写位置提供，不在字符串、注释、属性访问
+或函数参数中干扰 Eglot。普通 Org 不启用；Notebook 中先用 Enter 进入 cell 编辑。
+
+** Org：保留当前外观导出 PDF
+
+| 普通模式 | 插入模式 | 功能 |
+|----------+----------+------|
+| =SPC e p= | =C-c e p= | 导出当前可见全文为可选中、可搜索文字的 PDF |
+
+也可 =M-x my/org-export-visible-pdf=。默认保存为原 Org 文件旁的
+=文件名.view.pdf=，已有文件会确认覆盖；加 =C-u= 前缀可选路径。
+保留主题配色、代码高亮、标题字体、当前折叠及已显示的内联图片；折叠的内容
+不会展开导出。它处理整个 buffer，不只截取当前屏幕，不运行 cell、不保存笔记。
+A4 自动分页，长行会换行。若想导出完整内容，先自行展开全部标题/代码块。
+需要本机 Chrome/Chromium（macOS 已安装）；可设置 =my/org-visible-pdf-browser-program=。
+这是带可搜索文字的 HTML 打印版，不是截图，Org Modern 的边框、组合字形、
+缩进装饰及分页位置可能与 Emacs 不完全相同；普通 =C-c C-e= 导出菜单不变。
 
 ** Meow：选词与快速加双引号
 
@@ -354,12 +437,147 @@ Cape 提供额外的 =completion-at-point= 后端函数，如 dabbrev（动态�
   (add-hook 'completion-at-point-functions #'cape-elisp-block))
 #+end_src
 
+** Tempel（Python 代码片段）
+
+纯 Elisp，通过 Elpaca 安装。模板直接保存在本段，不依赖外部模板文件。
+局部合并 Tempel 与 Eglot 候选，保留现有 Python 参数补全的等号空格规则；
+只为 Python buffer 设置 Tab 及片段字段键，不修改其他语言的补全键位。
+
+#+begin_src emacs-lisp
+  (defvar my/python-snippet-templates
+    '((main "if __name__ == '__main__':" n> q :ann "入口判断")
+      (def "def " (p "name") "(" p "):" n> r> :ann "函数")
+      (adef "async def " (p "name") "(" p "):" n> r> :ann "async 函数")
+      (class "class " (p "ClassName") ":" n> r> :ann "类")
+      (classb "class " (p "ClassName") "(" (p "BaseClass") "):" n> r> :ann "继承类")
+      (for "for " (p "item") " in " (p "items") ":" n> r> :ann "遍历")
+      (fori "for " (p "i") " in range(" (p "10") "):" n> r> :ann "range 循环")
+      (if "if " p ":" n> r> :ann "条件")
+      (elif "elif " p ":" n> r> :ann "条件分支")
+      (while "while " p ":" n> r> :ann "while 循环")
+      (try (let* ((base (current-indentation))
+                  (body (+ base python-indent-offset)))
+             `(l "try:" n ,(make-string body ?\s) p n
+                 ,(make-string base ?\s) "except " (p "Exception") " as " (p "exc") ":"
+                 n ,(make-string body ?\s) r))
+           :ann "异常处理")
+      (with "with " (p "expression") " as " (p "name") ":" n> r> :ann "上下文管理")
+      (pr "print(" p ")" q :ann "print")
+      (imp "import " q :ann "导入模块")
+      (from "from " (p "module") " import " q :ann "导入名称")
+      (ret "return " q :ann "return")
+      (raise "raise " (p "Exception") "(" p ")" q :ann "raise"))
+    "Python-only Tempel templates, shared by files and Org cell editors.")
+
+  (defun my/python-snippet-context-p ()
+    "Only offer automatic snippets at a statement's empty-tail abbreviation."
+    (and (derived-mode-p 'python-mode 'python-ts-mode)
+         (not (nth 8 (syntax-ppss)))
+         (save-excursion (skip-chars-forward " \t") (eolp))
+         (save-excursion
+           (let ((end (point)))
+             (skip-chars-backward "[:alnum:]_")
+             (and (< (point) end)
+                  (progn (skip-chars-backward " \t") (bolp)))))))
+
+  (defun my/python-snippet-capf ()
+    "Merge statement snippets with Eglot without replacing its completions."
+    (when (my/python-snippet-context-p)
+      (if (bound-and-true-p eglot--managed-mode)
+          (progn
+            (require 'cape)
+            (funcall (cape-capf-super #'tempel-complete #'eglot-completion-at-point)))
+        (tempel-complete))))
+
+  (defun my/python-snippet-expand ()
+    "Expand an exact statement abbreviation and return non-nil on success."
+    (when (and (my/python-snippet-context-p) (tempel-expand))
+      (tempel-expand t)
+      t))
+
+  (defun my/python-snippet-tab ()
+    "Expand a Python template, move fields, or retain ordinary indentation."
+    (interactive)
+    (cond ((bound-and-true-p tempel--active) (tempel-next))
+          ((my/python-snippet-expand))
+          (t (indent-for-tab-command))))
+
+  (defun my/python-snippet-backtab ()
+    (interactive)
+    (if (bound-and-true-p tempel--active)
+        (tempel-previous)
+      (python-indent-dedent-line)))
+
+  (defun my/python-snippet-corfu-tab ()
+    "Let exact snippets expand with one Tab even when Corfu is already open."
+    (interactive)
+    (let ((selected (and (>= corfu--index 0) (nth corfu--index corfu--candidates))))
+      (if (and (not (bound-and-true-p tempel--active))
+               (my/python-snippet-context-p)
+               (tempel-expand)
+               (or (not selected)
+                   (equal (substring-no-properties selected) (thing-at-point 'symbol t))))
+          (progn (corfu-quit) (my/python-snippet-expand))
+        (corfu-complete))))
+
+  (defun my/python-snippet-setup ()
+    "Install snippets and private completion/field keymaps only for Python."
+    (when (derived-mode-p 'python-mode 'python-ts-mode)
+      (add-hook 'tempel-template-sources 'my/python-snippet-templates nil t)
+      (add-hook 'completion-at-point-functions #'my/python-snippet-capf nil t)
+      ;; These copies are buffer-local: Corfu in other languages is untouched.
+      (when (boundp 'corfu-map)
+        (setq-local corfu-map (copy-keymap corfu-map))
+        (define-key corfu-map (kbd "TAB") #'my/python-snippet-corfu-tab)
+        (define-key corfu-map (kbd "<tab>") #'my/python-snippet-corfu-tab))
+      (setq-local tempel-map (copy-keymap tempel-map))
+      (define-key tempel-map (kbd "TAB") #'tempel-next)
+      (define-key tempel-map (kbd "<tab>") #'tempel-next)
+      (define-key tempel-map (kbd "<backtab>") #'tempel-previous)
+      (define-key tempel-map (kbd "S-<tab>") #'tempel-previous)))
+
+  (use-package tempel
+    :ensure (:wait t)
+    :demand t
+    :config
+    (add-hook 'python-mode-hook #'my/python-snippet-setup)
+    (add-hook 'python-ts-mode-hook #'my/python-snippet-setup)
+    (add-hook 'eglot-managed-mode-hook #'my/python-snippet-setup))
+
+  (with-eval-after-load 'python
+    (dolist (map (list python-mode-map python-ts-mode-map))
+      (define-key map (kbd "TAB") #'my/python-snippet-tab)
+      (define-key map (kbd "<tab>") #'my/python-snippet-tab)
+      (define-key map (kbd "<backtab>") #'my/python-snippet-backtab)
+      (define-key map (kbd "S-<tab>") #'my/python-snippet-backtab)))
+#+end_src
+
 * 界面与外观
 ** 基础界面
+
+左右 fringe 指示栏继承当前背景，不固定为启动时的白色；新建 GUI frame
+及主题切换时同步刷新，保留透明度和 8 像素边距，不影响终端背景处理。
 
 #+begin_src emacs-lisp
 ;; GUI 窗口按像素缩放，不再以整行/整列为步长，避免贴边时留下空隙。
 (setq frame-resize-pixelwise t)
+
+(defun my/sync-frame-edge-faces (&optional frame-or-theme)
+  "Make GUI fringes follow the default face, including new frames/themes."
+  ;; FRAME=t updates defaults for frames that do not exist yet.  Do not
+  ;; freeze a concrete background color which can outlive the current theme.
+  (set-face-attribute 'fringe t :inherit 'default :background 'unspecified)
+  (dolist (frame (if (framep frame-or-theme) (list frame-or-theme) (frame-list)))
+    (when (display-graphic-p frame)
+      (set-face-attribute 'fringe frame :inherit 'default :background 'unspecified)
+      (let ((background (face-background 'default frame t)))
+        (dolist (face '(window-divider window-divider-first-pixel window-divider-last-pixel))
+          (set-face-attribute face frame :foreground background :background background))))))
+
+(add-hook 'after-make-frame-functions #'my/sync-frame-edge-faces)
+(add-hook 'enable-theme-functions #'my/sync-frame-edge-faces)
+(add-hook 'disable-theme-functions #'my/sync-frame-edge-faces)
+(my/sync-frame-edge-faces)
 
 (when (display-graphic-p)
   ;; 像素级平滑滚动（Emacs 29+）
@@ -496,6 +714,40 @@ GUI 才加载的主题。tree-sitter 上色完成后补绘，忽略字符串和�
 这些都是纯 Elisp 包，由 Elpaca 安装，不改 flakes。
 
 #+begin_src emacs-lisp
+  (defcustom my/web-large-buffer-threshold (* 256 1024)
+    "Web buffers above this size omit expensive decorative overlays."
+    :type 'integer :group 'convenience)
+
+  (defun my/web-heavy-buffer-p ()
+    "Detect large or minified HTML/JSON without scanning syntax trees."
+    (and (derived-mode-p 'html-ts-mode 'html-mode 'json-ts-mode 'json-mode)
+         (save-restriction
+           (widen)
+           (or (> (buffer-size) my/web-large-buffer-threshold)
+               (save-excursion
+                 (goto-char (point-min))
+                 (catch 'long-line
+                   (while (not (eobp))
+                     (when (> (- (line-end-position) (point)) 4000)
+                       (throw 'long-line t))
+                     (forward-line 1))))))))
+
+  (defun my/web-maybe-lighten ()
+    "Keep core tree-sitter/navigation, but drop costly web-buffer decoration."
+    (when (my/web-heavy-buffer-p)
+      (setq-local my/web-lightweight-p t
+                  truncate-lines t
+                  jit-lock-defer-time 0.1
+                  treesit-font-lock-level 2
+                  combobulate-highlight-context nil
+                  combobulate-json-highlight-queries-default nil
+                  combobulate-html-highlight-queries-default nil)
+      (when (bound-and-true-p indent-bars-mode) (indent-bars-mode -1))
+      (when (bound-and-true-p rainbow-delimiters-mode) (rainbow-delimiters-mode -1))
+      (when (and (boundp 'treesit-font-lock-settings)
+                 (fboundp 'combobulate-highlight-clear))
+        (combobulate-highlight-clear))))
+
   (defun my/rainbow-delimiters-ts-fontify (beg end &rest _)
     "Apply rainbow brackets after tree-sitter fontification in this buffer."
     (when (bound-and-true-p rainbow-delimiters-mode)
@@ -535,13 +787,13 @@ GUI 才加载的主题。tree-sitter 上色完成后补绘，忽略字符串和�
 
   (defun my/code-indent-bars-enable ()
     "Enable guides and rainbow brackets in a programming/config buffer."
-    ;; Enable rainbow first: indent-bars may immediately trigger fontification.
-    (rainbow-delimiters-mode-enable)
-    ;; Org reuses hidden buffers to color source blocks.  indent-bars enables
-    ;; font-lock there and can replace the TS fontifier with the regex one;
-    ;; the next cell/refontification then loses all native Python faces.
-    (unless (string-prefix-p " *org-src-fontification:" (buffer-name))
-      (indent-bars-mode 1)))
+    (my/web-maybe-lighten)
+    (unless (bound-and-true-p my/web-lightweight-p)
+      ;; Enable rainbow first: indent-bars may immediately trigger fontification.
+      (rainbow-delimiters-mode-enable)
+      ;; Org's hidden fontification buffers must retain the native TS fontifier.
+      (unless (string-prefix-p " *org-src-fontification:" (buffer-name))
+        (indent-bars-mode 1))))
 
   (use-package indent-bars
     :ensure (:repo "https://github.com/jdtsmith/indent-bars.git"
@@ -613,12 +865,7 @@ Org-modern 让 Org-mode 拥有更现代化的视觉效果：美化标题标记�
   (modify-all-frames-parameters
    '((right-divider-width . 8)
      (internal-border-width . 8)))
-  (dolist (face '(window-divider
-                  window-divider-first-pixel
-                  window-divider-last-pixel))
-    (face-spec-reset-face face)
-    (set-face-foreground face (face-attribute 'default :background)))
-  (set-face-background 'fringe (face-attribute 'default :background))
+  (my/sync-frame-edge-faces)
 
   (setq
    ;; ── Org 编辑行为 ──
@@ -649,6 +896,206 @@ Org-modern 让 Org-mode 拥有更现代化的视觉效果：美化标题标记�
   (global-org-modern-mode))
 #+end_src
 
+* Org 可见视图导出 PDF
+
+按顶部说明书的 =SPC e p= / =C-c e p= 导出当前显示效果。使用内置
+=htmlfontify= 读取实时 face，再由本机 Chrome/Chromium 打印为 PDF，
+不经过 LaTeX，不运行 Babel，不加载用户的浏览器 profile。源文件、光标、
+折叠状态与未保存的编辑均保留；失败时不覆盖已有 PDF。支持已显示的
+PNG / JPEG / SVG / GIF / WebP 图片，浏览器与字体使用本机现有安装。
+
+#+begin_src emacs-lisp
+(defcustom my/org-visible-pdf-browser-program nil
+  "Chrome/Chromium executable for visible Org PDF export; nil auto-detects."
+  :type '(choice (const nil) file) :group 'org)
+
+(defun my/org-visible-pdf-browser ()
+  (or (and my/org-visible-pdf-browser-program
+           (file-executable-p my/org-visible-pdf-browser-program)
+           my/org-visible-pdf-browser-program)
+      (cl-loop for name in '("google-chrome" "google-chrome-stable" "chromium" "chromium-browser" "chrome" "msedge")
+               thereis (executable-find name))
+      (cl-find-if
+       #'file-executable-p
+       (append
+        '("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+          "/Applications/Chromium.app/Contents/MacOS/Chromium"
+          "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge")
+        (cl-loop for root in (list (getenv "PROGRAMFILES") (getenv "PROGRAMFILES(X86)") (getenv "LOCALAPPDATA"))
+                 when root append
+                 (list (expand-file-name "Google/Chrome/Application/chrome.exe" root)
+                       (expand-file-name "Microsoft/Edge/Application/msedge.exe" root)))))
+      (user-error "Install Chrome/Chromium or set my/org-visible-pdf-browser-program")))
+
+(defun my/org-visible-pdf-escape (text)
+  (replace-regexp-in-string "[&<>\"]"
+                            (lambda (s) (cdr (assoc s '(("&" . "&amp;") ("<" . "&lt;")
+                                                        (">" . "&gt;") ("\"" . "&quot;"))))) text t t))
+
+(defun my/org-visible-pdf-image (display)
+  "Embed a displayed image without depending on external file URLs."
+  (let* ((spec (cdr display))
+         (file (plist-get spec :file))
+         (type (or (plist-get spec :type) (and file (intern (downcase (or (file-name-extension file) ""))))))
+         (mime (pcase type
+                 ((or 'jpg 'jpeg) "image/jpeg") ('png "image/png")
+                 ('svg "image/svg+xml") ('gif "image/gif") ('webp "image/webp")
+                 (_ (user-error "PDF snapshot does not support this image type: %s" type))))
+         (data (or (plist-get spec :data)
+                   (and file (with-temp-buffer
+                               (set-buffer-multibyte nil)
+                               (insert-file-contents-literally (expand-file-name file))
+                               (buffer-string)))))
+         (width (ignore-errors (car (image-size display t)))))
+    (unless (stringp data) (user-error "Cannot read displayed image: %s" file))
+    (when (multibyte-string-p data) (setq data (encode-coding-string data 'utf-8)))
+    (format "<img alt=\"inline image\" src=\"data:%s;base64,%s\"%s>"
+            mime (base64-encode-string data t)
+            (if (numberp width) (format " style=\"width:%dpx;max-width:100%%;height:auto\"" (round width)) ""))))
+
+(defun my/org-visible-pdf-face (face)
+  "Resolve live theme inheritance before htmlfontify serializes a face."
+  (let ((temporary 'my/org-visible-pdf--resolved-face))
+    (unless (facep temporary) (make-face temporary))
+    (face-spec-reset-face temporary)
+    (set-face-attribute temporary nil :inherit 'default)
+    (cond
+     ((facep face) (set-face-attribute temporary nil :inherit face))
+     ((keywordp (car-safe face))
+      (let (attributes)
+        (while face
+          (let ((key (pop face)) (value (pop face)))
+            (when (assq key face-attribute-name-alist)
+              (setq attributes (append attributes (list key value))))))
+        (apply #'set-face-attribute temporary nil attributes)))
+     ((consp face) (set-face-attribute temporary nil :inherit face)))
+    (cl-loop for attribute in '(:family :foreground :background :height :weight :slant
+                               :underline :overline :strike-through :box)
+             append (list attribute (face-attribute temporary attribute nil 'default)))))
+
+(defun my/org-visible-pdf-html ()
+  "Return HTML for the entire visible Org buffer, preserving current folds."
+  (require 'htmlfontify)
+  (let* ((title (buffer-name))
+         (background (face-attribute 'default :background nil t))
+         (foreground (face-attribute 'default :foreground nil t))
+         (tabs tab-width)
+         (snapshot (generate-new-buffer " *org-visible-pdf-snapshot*"))
+         (faces (make-hash-table :test #'equal))
+         (hfy-optimizations '(skip-refontification keep-overlays))
+         (hfy-page-header
+          (lambda (_file style)
+            (format "<!doctype html><html><head><meta charset=\"utf-8\"><title>%s</title>%s<style>
+@page { size: A4; margin: 12mm; }
+html, body { background: %s; color: %s; margin: 0; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; tab-size: %d; margin: 0; }
+img { max-width: 100%%; height: auto; break-inside: avoid; }
+</style></head><body>" (my/org-visible-pdf-escape title) style background foreground tabs)))
+         (hfy-page-footer (lambda (&rest _) "</body></html>"))
+         images html)
+    (unwind-protect
+        (progn
+          (save-restriction
+            (widen)
+            (font-lock-ensure)
+            (let ((position (point-min)) (end (point-max)) previous-display)
+              (while (< position end)
+                (let* ((next (next-char-property-change position end))
+                       (display (get-char-property position 'display))
+                       (hidden (invisible-p position))
+                       (raw-face (hfy-face-at position))
+                       (face (or (gethash raw-face faces)
+                                 (puthash raw-face (my/org-visible-pdf-face raw-face) faces)))
+                       (text
+                        (cond
+                         ((or (org-fold-folded-p position)
+                              (and hidden (not (eq (car-safe display) 'image))))
+                          ;; A folded subtree may hide its leading newline.
+                          (when (string-match-p "\n" (buffer-substring-no-properties position next)) "\n"))
+                         ((and display (eq display previous-display)) "")
+                         ((stringp display) display)
+                         ((eq (car-safe display) 'image)
+                          (let ((token (format "ORG-PDF-IMAGE-%s" (gensym))))
+                            (push (cons token (my/org-visible-pdf-image display)) images)
+                            token))
+                         ((and (eq (car-safe display) 'space) (numberp (plist-get (cdr display) :width)))
+                          (make-string (max 0 (round (plist-get (cdr display) :width))) ?\s))
+                         (t (buffer-substring-no-properties position next)))))
+                  (when text
+                    (with-current-buffer snapshot
+                      (insert (propertize (substring-no-properties text) 'face face))))
+                  (setq previous-display display position next)))))
+          (with-current-buffer snapshot
+            (setq html (htmlfontify-buffer nil title)))
+          (with-current-buffer html
+            (dolist (image images)
+              (goto-char (point-min))
+              (unless (search-forward (car image) nil t) (error "Image placeholder was lost"))
+              (replace-match (cdr image) t t))
+            (buffer-string)))
+      (when (buffer-live-p snapshot) (kill-buffer snapshot))
+      (when (buffer-live-p html) (kill-buffer html)))))
+
+(defun my/org-export-visible-pdf (&optional file)
+  "Export visible Org text/inline images with current faces to selectable PDF.
+Folds are preserved, not expanded.  No Babel cells are executed or saved.
+With a prefix argument, choose FILE instead of the adjacent .view.pdf."
+  (interactive (list (when (or current-prefix-arg (not buffer-file-name))
+                       (read-file-name "Visible Org PDF: " nil nil nil
+                                       (concat (file-name-base (or buffer-file-name (buffer-name))) ".view.pdf")))))
+  (unless (derived-mode-p 'org-mode) (user-error "Use this command in an Org buffer"))
+  (require 'browse-url)
+  (let* ((browser (my/org-visible-pdf-browser))
+         (target (expand-file-name (or file (concat (file-name-sans-extension buffer-file-name) ".view.pdf"))))
+         (directory (file-name-directory target)))
+    (when (file-remote-p target) (user-error "Export the PDF to a local path"))
+    (unless (file-directory-p directory) (user-error "Output directory does not exist: %s" directory))
+    (unless (or (not (file-exists-p target)) (yes-or-no-p (format "Overwrite %s? " target)))
+      (user-error "PDF export cancelled"))
+    (let ((temporary (make-temp-file "org-visible-pdf-" t))
+          (staged (make-temp-file (expand-file-name ".org-visible-pdf-" directory) nil ".pdf"))
+          (log (generate-new-buffer " *org-visible-pdf-log*")))
+      (unwind-protect
+          (let* ((html (expand-file-name "source.html" temporary))
+                 (coding-system-for-write 'utf-8-unix)
+                 (content (my/org-visible-pdf-html)))
+            (with-temp-file html (insert content))
+            (message "Printing visible Org buffer to PDF…")
+            (let ((status (call-process browser nil log nil
+                                        "--headless" "--disable-gpu" "--disable-background-networking"
+                                        "--disable-extensions" "--no-first-run" "--no-default-browser-check"
+                                        "--no-pdf-header-footer"
+                                        (concat "--user-data-dir=" (expand-file-name "profile" temporary))
+                                        (concat "--print-to-pdf=" staged)
+                                        (browse-url-file-url html))))
+              (unless (and (integerp status) (zerop status)
+                           (with-temp-buffer
+                             (insert-file-contents-literally staged nil 0 5)
+                             (equal (buffer-string) "%PDF-")))
+                (user-error "PDF export failed: %s"
+                            (with-current-buffer log (buffer-substring-no-properties (point-min) (min (point-max) (+ (point-min) 1500)))))))
+            (rename-file staged target t)
+            (message "Visible Org PDF exported: %s" target)
+            target)
+        (when (file-exists-p staged) (delete-file staged))
+        (ignore-errors (delete-directory temporary t))
+        (when (buffer-live-p log) (kill-buffer log))))))
+
+(defun my/org-visible-pdf-meow-setup ()
+  "Add a visible-PDF export leader only to this Org buffer."
+  (let ((leader (make-sparse-keymap)) (export-map (make-sparse-keymap)))
+    (set-keymap-parent leader (meow--get-leader-keymap))
+    (define-key export-map (kbd "p") #'my/org-export-visible-pdf)
+    (define-key export-map (kbd "C-p") #'my/org-export-visible-pdf)
+    (define-key leader (kbd "e") export-map)
+    (setq-local meow-keypad-leader-dispatch leader)))
+
+(with-eval-after-load 'org
+  (define-key org-mode-map (kbd "C-c e p") #'my/org-export-visible-pdf))
+(with-eval-after-load 'meow
+  (add-hook 'org-mode-hook #'my/org-visible-pdf-meow-setup))
+#+end_src
+
 * Org Python Notebook
 
 使用内置 =ob-python=，不是 Jupyter kernel，也不读写 =.ipynb=。
@@ -659,6 +1106,17 @@ cell 间共享变量，结果就地替换。仅 notebook 内执行免确认，�
 执行确认设置不变；只对可信 notebook 使用此模式。
 Python 异常及 stderr 显示在当前 cell 的 =#+RESULTS= 中；失败时不自动
 跳转或新增 cell，修正后重跑会替换旧的错误结果。
+多线程执行等待本 cell 新建的非 daemon 线程完成后再结束，并收集工作线程
+异常。输出直接转发 Python 原始 stdout/stderr，不对 =print= 加锁、不整行
+整理、不排序或按线程分组；顺序与行内穿插由线程实际调度决定。
+不设置线程等待超时；=C-g= 会结束当前 Python 会话（变量清空），下次执行重建。
+后台 daemon 线程不等待，执行结束后的常规文本输出不污染下一 cell；线程池
+应使用 =with= 或显式 =shutdown()= 关闭，否则 Notebook 会一直等其工作线程。
+多进程使用当前 cell 的真实源文件作为可导入入口，保留系统的 =spawn= /
+=forkserver=，自动等待新建的非 daemon 子进程退出并检查退出码。worker
+及所需导入须在同一 cell 或可导入模块中，启动代码放在
+~if __name__ == '__main__':~ 下；进程池用 =with= 关闭。不自动重放过去的
+cell，不把父进程变量假装成共享内存；daemon 后台子进程建议改用独立脚本。
 
 | Meow 普通模式 | 编辑模式 | 操作 |
 |---------------+----------+------|
@@ -688,21 +1146,160 @@ Python 异常及 stderr 显示在当前 cell 的 =#+RESULTS= 中；失败时不�
   (defvar my/org-notebook--capture-python-errors nil)
   (defvar my/org-notebook--python-error-output nil)
 
+  (defconst my/org-notebook--python-cell-runtime
+    "import ast as _ast
+import multiprocessing as _mp
+import multiprocessing.process as _mp_process
+import sys as _sys
+import threading as _threading
+import traceback as _traceback
+
+_before_children = set(_mp.active_children())
+_started_processes = []
+_old_process_start = _mp_process.BaseProcess.start
+_main_module = _sys.modules['__main__']
+_missing = object()
+_old_main_file = getattr(_main_module, '__file__', _missing)
+_old_main_spec = getattr(_main_module, '__spec__', _missing)
+# Babel's transport body opens the original cell file (not this helper).
+# spawn/forkserver must import that real source, with __name__=__mp_main__.
+_source = next((node.args[0].value for node in _ast.walk(_ast.parse(__cell_body))
+                if isinstance(node, _ast.Call)
+                and isinstance(node.func, _ast.Name) and node.func.id == 'open'
+                and node.args and isinstance(node.args[0], _ast.Constant)
+                and isinstance(node.args[0].value, str)), None)
+if _source is not None:
+    _main_module.__file__ = _source
+    _main_module.__spec__ = None
+
+_before = set(_threading.enumerate())
+_main = _threading.current_thread()
+_active = True
+_owned = set()
+_failed = False
+_old_stdout, _old_stderr = _sys.stdout, _sys.stderr
+_old_thread_hook = _threading.excepthook
+
+class _NotebookStream:
+    def __init__(self, real):
+        self.real = real
+    def write(self, text):
+        # Forward each original write immediately: no print lock, line
+        # buffering, sorting or rewriting of concurrent output.
+        if not _active and _threading.current_thread() in _owned:
+            return len(text)
+        return self.real.write(text)
+    def flush(self):
+        if _active or _threading.current_thread() not in _owned:
+            self.real.flush()
+    def __getattr__(self, name):
+        return getattr(self.real, name)
+
+_out, _err = _NotebookStream(_old_stdout), _NotebookStream(_old_stderr)
+
+def _start_process(process, *args, **kwargs):
+    result = _old_process_start(process, *args, **kwargs)
+    # Retain even fast-exiting workers, so their failure isn't lost when
+    # active_children() reaps them.  Do not change the process start method.
+    _started_processes.append(process)
+    return result
+
+def _thread_error(args):
+    global _failed
+    if args.thread not in _before and args.exc_type is not SystemExit:
+        _failed = True
+    # Keep Python's original traceback formatting and exception-hook behavior.
+    return _old_thread_hook(args)
+
+_sys.stdout, _sys.stderr = _out, _err
+_threading.excepthook = _thread_error
+_mp_process.BaseProcess.start = _start_process
+try:
+    try:
+        # Execute in the real session globals: cells still share definitions.
+        exec(__cell_body, __cell_globals)
+    except BaseException:
+        _failed = True
+        _traceback.print_exc(file=_err)
+    finally:
+        # Re-scan to include children created by other workers.  Daemon
+        # threads are intentional background work and do not delay a cell.
+        while True:
+            pending = [t for t in _threading.enumerate()
+                       if t not in _before and not t.daemon and t is not _main]
+            children = set(_started_processes) | (set(_mp.active_children()) - _before_children)
+            pending_children = [p for p in children if not p.daemon and p.is_alive()]
+            if not pending and not pending_children:
+                break
+            for thread in pending:
+                thread.join(0.05)
+            for process in pending_children:
+                process.join(0.05)
+        for process in _started_processes:
+            if not process.daemon and process.exitcode not in (None, 0):
+                _failed = True
+                _old_stderr.write('Notebook: child process ' + process.name
+                                  + ' exited with code ' + str(process.exitcode) + '\\n')
+except BaseException:
+    _failed = True
+    _traceback.print_exc(file=_err)
+finally:
+    _owned = set(_threading.enumerate()) - _before
+    _active = False
+    _threading.excepthook = _old_thread_hook
+    _mp_process.BaseProcess.start = _old_process_start
+    for name, value in [('__file__', _old_main_file), ('__spec__', _old_main_spec)]:
+        if value is _missing:
+            _main_module.__dict__.pop(name, None)
+        else:
+            setattr(_main_module, name, value)
+    # Only suppress background workers after the cell has finished;
+    # while it runs, stdout/stderr retain their original write sequence.
+    if not _owned:
+        _sys.stdout, _sys.stderr = _old_stdout, _old_stderr
+    if _failed:
+        _old_stdout.write('\\n' + __cell_error + '\\n')
+    del __cell_body, __cell_globals
+"
+    "Isolated stdlib-only cell runner; user code executes in session globals.")
+
   (defun my/org-notebook-python-send-with-errors (original session body &rest args)
-    "Capture session errors before Babel's end-of-output marker is printed."
+    "Collect complete threaded output/errors before a unique Babel end marker."
     (if (not my/org-notebook--capture-python-errors)
         (apply original session body args)
-      (let* ((marker (concat "__ORG_NOTEBOOK_ERROR_"
-                             (secure-hash 'sha1 (format "%s:%s" (float-time) (random)))
-                             "__"))
+      (let* ((token (secure-hash 'sha1 (format "%s:%s" (float-time) (random))))
+             (marker (concat "__ORG_NOTEBOOK_ERROR_" token "__"))
+             (org-babel-python-eoe-indicator (concat "__ORG_NOTEBOOK_EOE_" token "__"))
+             ;; Polling interval, not an execution timeout: let C-g stop a
+             ;; silent worker wait promptly rather than sleeping five seconds.
+             (org-babel-comint-fallback-regexp-threshold 0.1)
              (wrapped
-              (concat
-               "with __import__('contextlib').redirect_stderr(__import__('sys').stdout):\n"
-               "    try:\n" (org-babel-python--shift-right body 8) "\n"
-               "    except BaseException:\n"
-               "        __import__('traceback').print_exc(file=__import__('sys').stdout)\n"
-               "        __import__('sys').stdout.write('" marker "\\n')\n"))
-             (output (apply original session wrapped args)))
+              (format "exec(%s, {'__cell_body': %s, '__cell_globals': globals(), '__cell_error': %s})"
+                      (decode-coding-string (json-serialize my/org-notebook--python-cell-runtime) 'utf-8)
+                      (decode-coding-string (json-serialize body) 'utf-8)
+                      (decode-coding-string (json-serialize marker) 'utf-8)))
+             (output
+              (condition-case err
+                  (apply original session wrapped args)
+                (quit
+                 ;; Killing this session is the only reliable way to stop all
+                 ;; its Python threads and prevent late output poisoning reruns.
+                 (let* ((inhibit-quit t)
+                        (buffer (if (bufferp session) session
+                                  (get-buffer
+                                   (org-babel-session-buffer:python
+                                    (if (stringp session) (intern session) session)))))
+                        (process (and buffer (get-buffer-process buffer))))
+                   (when (and process (process-live-p process))
+                     (set-process-query-on-exit-flag process nil)
+                     (when (eq system-type 'windows-nt)
+                       (ignore-errors
+                         (call-process "taskkill" nil nil nil "/F" "/T" "/PID"
+                                       (number-to-string (process-id process)))))
+                     ;; On POSIX delete-process kills the subprocess group,
+                     ;; including multiprocessing workers/resource trackers.
+                     (delete-process process)))
+                 (signal (car err) (cdr err))))))
         (when (and (stringp output)
                    (string-match (concat "^" (regexp-quote marker) "[\r\n]*\\'") output))
           (setq output (string-trim-right (substring output 0 (match-beginning 0)))
@@ -1204,10 +1801,12 @@ buffer 的 Combobulate 结构树（不截断为光标附近的几层）；=q= �
 不询问路径；已有文件会确认覆盖。完整树放在 UTF-8 代码块中保留对齐。
 生成视图时记录原文件路径，关闭中间阅读 buffer 后仍可导出。
 
-这三类 buffer 另有 =SPC s p=（编辑模式 =C-c s p=）：在当前窗口列出
-光标所在语法节点到文件根节点的完整父级链，包含名称、节点类型、起始行列
-及可用的父节点字段名，不省略中间语法层。空白处取真正包含该位置的节点，
-不跳到后面的单词；=q= 返回原 buffer 的原光标位置。
+=SPC s p=（编辑模式 =C-c s p=）在 JSON 中显示方括号节点、嵌套容器和箭头，
+顶部居中显示可点击的原 HTML 标签。点击节点返回 JSON 对应位置；=g= 重排，
+=v= 查看可选代码，=s= 导出 SVG。渲染器在 =lisp/my-json-diagram.el=，纯内置 SVG，
+不需要 Graphviz 或浏览器渲染。=y= / =p= 与 =c= / =l= 仍可复制表达式、print、
+网页解析及本地验证代码。HTML/Python 保留原父级链；JSON 加 =C-u= 前缀可查看
+原语法链。=q= 返回原 buffer 原光标位置。
 
 HTML 默认使用 =html-ts-mode=。仅 HTML buffer 中的 =SPC j j=（编辑模式
 =C-c j j=）在当前窗口打开内嵌 JSON 的独立只读 buffer，不创建文件，
@@ -1215,9 +1814,10 @@ HTML 默认使用 =html-ts-mode=。仅 HTML buffer 中的 =SPC j j=（编辑模�
 =application/ld+json= 等 JSON script。阅读 buffer 使用 =json-ts-mode= 和
 Combobulate，可用 =SPC ↑= / =SPC ↓= 导航；=q= 关闭并返回 HTML。
 
-HTML / JSON 中 =SPC f f=（编辑模式 =C-c f f=）使用 Prettier 格式化全文，
+HTML / JSON 中 =SPC f f=（编辑模式 =C-c f f=）使用后台 Prettier 格式化全文，
 即使当前有选区或 narrowing 也处理整个文件。不自动保存，支持撤销；格式化
-失败不修改原文。只读 JSON 快照仍保持只读。Prettier 通过 flakes 安装，
+失败或期间又编辑了原文时不会覆盖。差异比较限时，大文件直接批量替换并使用
+轻量显示，不全量强制高亮。只读 JSON 快照仍保持只读。Prettier 通过 flakes 安装，
 Windows 需手动安装并放入 PATH。
 
 =typst-ts-mode= 把 =define-compilation-mode= 写进了 autoloads，Elpaca 加载
@@ -1238,8 +1838,64 @@ Windows 需手动安装并放入 PATH。
     :ensure (:autoloads nil)
     :mode "\\.typ\\'")
 
+  (defvar-local my/web-format-process nil
+    "Current asynchronous Prettier job for this buffer.")
+
+  (defun my/web-format-cancel ()
+    "Cancel this buffer's pending formatter without applying partial output."
+    (interactive)
+    (let ((process my/web-format-process))
+      (setq my/web-format-process nil)
+      (when process (process-put process 'my/web-format-state 'cancelled))
+      (when (and process (process-live-p process)) (delete-process process))))
+
+  (defun my/web-format-finished (source tick output errors process _event)
+    "Apply a completed formatter only to an unchanged live SOURCE."
+    (when (memq (process-status process) '(exit signal))
+      (unwind-protect
+          (when (and (buffer-live-p source)
+                     (eq process (buffer-local-value 'my/web-format-process source)))
+            (with-current-buffer source
+              (setq my/web-format-process nil)
+              (condition-case err
+                  (cond
+                   ((not (and (eq (process-status process) 'exit)
+                              (zerop (process-exit-status process))))
+                    (error "%s" (with-current-buffer errors (string-trim (buffer-string)))))
+                   ((/= tick (buffer-chars-modified-tick))
+                    (process-put process 'my/web-format-state 'stale)
+                    (message "Prettier: %s changed while formatting; nothing overwritten, please retry" (buffer-name)))
+                   (t
+                    (barf-if-buffer-read-only)
+                    (save-restriction
+                      (widen)
+                      (my/web-maybe-lighten)
+                      (let ((position (point))
+                            (inhibit-redisplay t))
+                        (atomic-change-group
+                          ;; Never run an unbounded character diff.  Large
+                          ;; buffers use one bulk replacement, not thousands
+                          ;; of edits/hook calls for whitespace changes.
+                          (replace-buffer-contents output
+                                                   (if (bound-and-true-p my/web-lightweight-p) 0 0.05)))
+                        (goto-char (min (point-max) (max (point-min) position))))
+                      (when font-lock-mode (font-lock-flush)))
+                    (process-put process 'my/web-format-state 'done)
+                    (message "Prettier: formatted %s (not saved)" (buffer-name))))
+                (error
+                 (process-put process 'my/web-format-state 'error)
+                 (with-current-buffer (get-buffer-create "*Prettier errors*")
+                   (let ((inhibit-read-only t))
+                     (erase-buffer)
+                     (insert (error-message-string err))
+                     (special-mode)))
+                 (message "Prettier failed; original buffer retained. See *Prettier errors*")))))
+        (let ((kill-buffer-query-functions nil))
+          (dolist (buffer (list output errors))
+            (when (buffer-live-p buffer) (kill-buffer buffer)))))))
+
   (defun my/web-format-buffer ()
-    "Format the entire HTML/JSON buffer with Prettier, without saving it."
+    "Format the entire HTML/JSON buffer asynchronously, without saving it."
     (interactive)
     (barf-if-buffer-read-only)
     (let* ((parser (cond ((derived-mode-p 'html-ts-mode) "html")
@@ -1247,27 +1903,36 @@ Windows 需手动安装并放入 PATH。
                          (t (user-error "Use this command in an HTML or JSON buffer"))))
            (program (or (executable-find "prettier")
                         (user-error "Prettier is not on PATH; install it via flakes (Windows: install manually)")))
-           (filename (or buffer-file-name
-                         (expand-file-name (concat "untitled." parser) default-directory)))
+           (filename (or buffer-file-name (expand-file-name (concat "untitled." parser))))
+           (source (current-buffer))
+           (tick (buffer-chars-modified-tick))
            (output (generate-new-buffer " *prettier-output*"))
-           (stderr (make-temp-file "emacs-prettier-"))
-           (coding-system-for-read 'utf-8-unix)
-           (coding-system-for-write 'utf-8-unix))
-      (unwind-protect
-          (save-restriction
-            (widen)
-            (let ((status (call-process-region
-                           (point-min) (point-max) program nil (list output stderr) nil
-                           "--parser" parser "--stdin-filepath" filename)))
-              (unless (and (integerp status) (zerop status))
-                (user-error "Prettier failed (%s): %s" status
-                            (string-trim
-                             (with-temp-buffer (insert-file-contents stderr) (buffer-string)))))
-              (atomic-change-group
-                (replace-buffer-contents output))
-              (message "Formatted entire %s buffer (not saved)" parser)))
-        (when (buffer-live-p output) (kill-buffer output))
-        (delete-file stderr))))
+           (errors (generate-new-buffer " *prettier-stderr*"))
+           process)
+      (my/web-format-cancel)
+      (condition-case err
+          (progn
+            (setq process
+                  (make-process
+                   :name "prettier" :buffer output :stderr errors :noquery t
+                   :connection-type 'pipe :coding '(utf-8-unix . utf-8-unix)
+                   :command (list program "--parser" parser "--stdin-filepath" filename)
+                   :sentinel (apply-partially #'my/web-format-finished source tick output errors)))
+            (setq my/web-format-process process)
+            (process-put process 'my/web-format-state 'running)
+            (add-hook 'kill-buffer-hook #'my/web-format-cancel nil t)
+            (save-restriction
+              (widen)
+              (process-send-region process (point-min) (point-max)))
+            (process-send-eof process)
+            (message "Prettier: formatting %s in background…" (buffer-name))
+            process)
+        (error
+         (setq my/web-format-process nil)
+         (when (and process (process-live-p process)) (delete-process process))
+         (dolist (buffer (list output errors))
+           (when (buffer-live-p buffer) (kill-buffer buffer)))
+         (signal (car err) (cdr err))))))
 
   ;;; HTML: use the existing automatic tree-sitter grammar installation.
   (use-package html-ts-mode
@@ -1295,7 +1960,8 @@ Windows 需手动安装并放入 PATH。
     (add-hook 'html-ts-mode-hook #'my/html-meow-setup))
 
   (defun my/html-script-attribute (tag name)
-    "Return attribute NAME of the tree-sitter start TAG, or nil."
+    "Return decoded attribute NAME of the tree-sitter start TAG, or nil."
+    (require 'xml)
     (let (value)
       (dotimes (i (treesit-node-child-count tag t))
         (let ((attribute (treesit-node-child tag i t)))
@@ -1308,22 +1974,28 @@ Windows 需手动安装并放入 PATH。
               (when node
                 (when (equal (treesit-node-type node) "quoted_attribute_value")
                   (setq node (treesit-node-child node 0 t)))
-                (when node (setq value (treesit-node-text node t))))))))
+                (when node
+                  (let ((raw (treesit-node-text node t)))
+                    (setq value (condition-case nil (xml-substitute-special raw)
+                                  (error raw))))))))))
       value))
 
   (defun my/html-json-scripts ()
     "List JSON script entries with :label, :beg and :end in this HTML buffer."
-    (let (entries)
+    (let (entries seen)
       (dolist (script (treesit-query-capture
                        (treesit-buffer-root-node 'html)
                        '((script_element) @script) nil nil t))
         (let* ((tag (treesit-node-child script 0 t))
-               (type (downcase (string-trim
-                               (car (split-string
-                                     (or (my/html-script-attribute tag "type") "")
-                                     ";")))))
+               (raw-type (or (my/html-script-attribute tag "type") ""))
+               (type (downcase (string-trim (car (split-string raw-type ";")))))
                (id (my/html-script-attribute tag "id"))
+               (selector-index
+                (cl-count-if (lambda (item)
+                               (if id (equal id (car item))
+                                 (equal raw-type (cdr item)))) seen))
                body)
+          (push (cons id raw-type) seen)
           (when (or (equal type "application/json")
                     (string-match-p "\\`application/[^;]+\\+json\\'" type))
             (dotimes (i (treesit-node-child-count script t))
@@ -1335,12 +2007,18 @@ Windows 需手动安装并放入 PATH。
                                         (if id (concat "#" id) "script") type
                                         (line-number-at-pos (treesit-node-start script)))
                           :beg (treesit-node-start body)
-                          :end (treesit-node-end body))
+                          :end (treesit-node-end body)
+                          :id id :type raw-type :selector-index selector-index
+                          :line (line-number-at-pos (treesit-node-start script))
+                          :tag-start (treesit-node-start tag)
+                          :tag (treesit-node-text tag t))
                     entries)))))
       (nreverse entries)))
 
   (defvar-local my/html-json-source-buffer nil
     "HTML buffer from which this independent JSON view was created.")
+  (defvar-local my/html-json-origin nil
+    "Captured HTML file/tag/selector provenance, valid even after source closes.")
 
   (defun my/html-json-view-quit ()
     "Close this JSON view and return to its HTML source in the same window."
@@ -1376,6 +2054,7 @@ Always prompt if multiple scripts exist, regardless of point.  q returns
     (unless (derived-mode-p 'html-ts-mode)
       (user-error "Run this command in an HTML tree-sitter buffer"))
     (let* ((source (current-buffer))
+           (tick (buffer-chars-modified-tick))
            (entries (my/html-json-scripts))
            (entry (if (= (length entries) 1)
                       (car entries)
@@ -1386,7 +2065,12 @@ Always prompt if multiple scripts exist, regardless of point.  q returns
                         (cdr (assoc (completing-read "JSON script: " choices nil t)
                                     choices)))))))
       (unless entry (user-error "No embedded JSON script found"))
-      (let ((text (buffer-substring-no-properties
+      (unless (= tick (buffer-chars-modified-tick))
+        (user-error "HTML changed while selecting; run this command again"))
+      (let ((origin (append (copy-sequence entry)
+                            (list :file buffer-file-name :buffer-name (buffer-name)
+                                  :modified (buffer-modified-p))))
+            (text (buffer-substring-no-properties
                    (plist-get entry :beg) (plist-get entry :end))))
         (condition-case err
             (json-parse-string text)
@@ -1399,11 +2083,10 @@ Always prompt if multiple scripts exist, regardless of point.  q returns
                 (with-current-buffer view
                   (insert text)
                   (json-ts-mode)
-                  ;; Independent text properties prevent HTML/JSON font-lock clashes.
-                  (font-lock-mode 1)
-                  (font-lock-flush)
-                  (font-lock-ensure)
+                  ;; This fresh buffer has no HTML properties.  Let JIT color
+                  ;; only the visible region instead of eagerly fontifying all.
                   (setq-local my/html-json-source-buffer source
+                              my/html-json-origin origin
                               buffer-read-only t
                               buffer-offer-save nil)
                   (my/html-json-view-mode 1)
@@ -1426,9 +2109,11 @@ Always prompt if multiple scripts exist, regardless of point.  q returns
                 ("C-c f f" . my/web-format-buffer)))
 
   (defun my/combobulate-enable ()
-    "Enable Combobulate explicitly in supported JSON and Python buffers."
+    "Enable navigation without expensive queries in large web buffers."
+    (my/web-maybe-lighten)
     (require 'combobulate)
-    (combobulate-mode 1))
+    (combobulate-mode 1)
+    (when (bound-and-true-p my/web-lightweight-p) (combobulate-highlight-clear)))
 
   (use-package combobulate
     :ensure (:repo "https://github.com/mickeynp/combobulate.git"
@@ -1452,8 +2137,9 @@ Always prompt if multiple scripts exist, regardless of point.  q returns
       (while (and (buffer-live-p buffer) (not (memq buffer seen)) (not file))
         (push buffer seen)
         (with-current-buffer buffer
-          (if buffer-file-name
-              (setq file (expand-file-name buffer-file-name))
+          (if-let* ((origin (or buffer-file-name
+                               (plist-get (bound-and-true-p my/html-json-origin) :file))))
+              (setq file (expand-file-name origin))
             (setq buffer (or (bound-and-true-p my/html-json-source-buffer)
                              (bound-and-true-p my/combobulate-structure-source))))))
       file))
@@ -1596,14 +2282,175 @@ Always prompt if multiple scripts exist, regardless of point.  q returns
                 (buffer-name) (line-number-at-pos position t) (current-column)
                 (mapconcat #'identity (nreverse lines) "\n")))))
 
-  (defun my/combobulate-show-ancestors ()
-    "Show the complete syntax ancestry at point in this window; q returns."
+  (defun my/json-python-literal (text)
+    "Quote TEXT as a Python string, decoding json-serialize's UTF-8 bytes."
+    (decode-coding-string (json-serialize text) 'utf-8))
+
+  (defun my/json-python-reference-info ()
+    "Compute an executable data[...] path at point without drawing a full tree."
+    (save-restriction
+      (widen)
+      (let* ((root (treesit-buffer-root-node 'json))
+             (node (or (and (< (point) (treesit-node-end root))
+                            (treesit-node-descendant-for-range root (point) (1+ (point)) t))
+                       root))
+             (types '("object" "array" "string" "number" "true" "false" "null" "pair" "document"))
+             parts)
+        (when (treesit-node-check root 'has-error)
+          (user-error "Fix the JSON syntax before copying a Python reference"))
+        (while (and node (not (member (treesit-node-type node) types)))
+          (setq node (treesit-node-parent node)))
+        (when (equal (treesit-node-type node) "document")
+          (setq node (treesit-node-child node 0 t)))
+        (when (equal (treesit-node-type node) "pair")
+          (setq node (treesit-node-child-by-field-name node "value")))
+        ;; A key denotes that pair's value, not a string to index into.
+        (when-let* ((parent (treesit-node-parent node))
+                    ((equal (treesit-node-type parent) "pair"))
+                    ((treesit-node-eq node (treesit-node-child-by-field-name parent "key"))))
+          (setq node (treesit-node-child-by-field-name parent "value")))
+        (unless node (user-error "No JSON value at point"))
+        (let ((target node) (nodes (list node)))
+          (while (treesit-node-parent node)
+            (let* ((parent (treesit-node-parent node))
+                   (type (treesit-node-type parent)))
+              (cond
+               ((equal type "pair")
+                (let* ((key (json-parse-string
+                             (treesit-node-text (treesit-node-child-by-field-name parent "key") t)))
+                       (sibling (treesit-node-next-sibling parent t)))
+                  ;; json.loads uses the LAST duplicate key.  Do not claim
+                  ;; that a shadowed earlier value is reachable by data[key].
+                  (while sibling
+                    (when (and (equal (treesit-node-type sibling) "pair")
+                               (equal key (json-parse-string
+                                           (treesit-node-text (treesit-node-child-by-field-name sibling "key") t))))
+                      (user-error "This value is shadowed by a later duplicate JSON key: %s" key))
+                    (setq sibling (treesit-node-next-sibling sibling t)))
+                  (push key parts)))
+               ((equal type "array")
+                (let ((index 0) (sibling (treesit-node-prev-sibling node t)))
+                  (while sibling
+                    (unless (equal (treesit-node-type sibling) "comment") (cl-incf index))
+                    (setq sibling (treesit-node-prev-sibling sibling t)))
+                  (push index parts))))
+              (when (member type '("object" "array")) (push parent nodes))
+              (setq node parent)))
+          (list :parts parts :nodes nodes
+                :expression (concat "data" (mapconcat
+                                           (lambda (part) (format "[%s]" (if (integerp part) part (my/json-python-literal part))))
+                                           parts ""))
+                :type (treesit-node-type target)
+                :value (buffer-substring-no-properties
+                        (treesit-node-start target)
+                        (min (treesit-node-end target) (+ (treesit-node-start target) 400))))))))
+
+  (defun my/json-html-selector (origin)
+    "Recreate the exact selected script, including duplicate type/id matches."
+    (let* ((id (plist-get origin :id))
+           (index (or (plist-get origin :selector-index) 0))
+           (filter (if id (concat "id=" (my/json-python-literal id))
+                     (concat "attrs={\"type\": " (my/json-python-literal (plist-get origin :type)) "}"))))
+      (if (zerop index)
+          (format "exjson = exhtml.find(\"script\", %s)\nif exjson is None:\n    raise ValueError(\"JSON script not found in this HTML\")\n" filter)
+        (format "exjson = exhtml.find_all(\"script\", %s)[%d]\n" filter index))))
+
+  (defvar-local my/json-reference-info nil
+    "Expressions and runnable code belonging to this JSON reference view.")
+
+  (defun my/json-reference-copy (kind)
+    "Copy a code variant KIND from this reference view, without truncation."
+    (let ((text (plist-get my/json-reference-info kind)))
+      (unless text (user-error "This JSON view has no code for %s" kind))
+      (kill-new text)
+      (message "Copied Python %s" kind)))
+
+  (define-minor-mode my/json-reference-mode
+    "Copy JSON references, web extraction or local validation code."
+    :init-value nil :lighter nil
+    :keymap (let ((map (make-sparse-keymap)))
+              (define-key map (kbd "y") (lambda () (interactive) (my/json-reference-copy :expression)))
+              (define-key map (kbd "p") (lambda () (interactive) (my/json-reference-copy :print-code)))
+              (define-key map (kbd "c") (lambda () (interactive) (my/json-reference-copy :web-code)))
+              (define-key map (kbd "l") (lambda () (interactive) (my/json-reference-copy :local-code)))
+              map)
+    (when my/json-reference-mode
+      (setq-local emulation-mode-map-alists
+                  (cons 'my/json-reference-emulation-alist
+                        (remq 'my/json-reference-emulation-alist emulation-mode-map-alists)))))
+
+  (defvar my/json-reference-emulation-alist
+    `((my/json-reference-mode . ,my/json-reference-mode-map)))
+
+  (defun my/json-reference-comment (text)
+    "Keep all provenance and examples valid Python comments."
+    (mapconcat (lambda (line) (concat "# " line)) (split-string text "\n") "\n"))
+
+  ;; The native SVG renderer is kept separate from the data/path logic.
+  (require 'my-json-diagram (expand-file-name "lisp/my-json-diagram.el" user-emacs-directory))
+
+  (defun my/json-show-python-reference ()
+    "Show nested JSON boxes/arrows and clickable source provenance."
     (interactive)
+    (let* ((info (my/json-python-reference-info))
+           (origin my/html-json-origin)
+           (expression (plist-get info :expression))
+           (print-code (concat "print(" expression ")\n"))
+           (selector (and origin (my/json-html-selector origin)))
+           (parse-code (and origin (concat selector "data = json.loads(exjson.string)\n" print-code)))
+           (web-code (and origin (concat "import json\nfrom bs4 import BeautifulSoup\n\n"
+                                         "exhtml = BeautifulSoup(response.text, \"html.parser\")\n" parse-code)))
+           (file (or (plist-get origin :file) (and (not origin) buffer-file-name)))
+           (local-code
+            (when file
+              (if origin
+                  (concat "import json\nfrom pathlib import Path\nfrom bs4 import BeautifulSoup\n\n"
+                          "exhtml = BeautifulSoup(Path(" (my/json-python-literal file) ").read_bytes(), \"html.parser\")\n" parse-code)
+                (concat "import json\nfrom pathlib import Path\n\ndata = json.loads(Path("
+                        (my/json-python-literal file) ").read_bytes())\n" print-code))))
+           (provenance
+            (if origin
+                (format "来源 HTML: %s\n原始标签（第 %d 行）: %s\n相同 id/type 的 script 中第 %d 个（从 0 开始）"
+                        (or (plist-get origin :file) (plist-get origin :buffer-name))
+                        (plist-get origin :line) (plist-get origin :tag)
+                        (or (plist-get origin :selector-index) 0))
+              (format "来源 JSON: %s" (or buffer-file-name (buffer-name)))))
+           (text
+            (concat
+             (my/json-reference-comment
+              (concat "JSON → Python\ny 复制表达式 | p 复制 print | c 复制网页解析 | l 复制本地运行 | q 返回\n"
+                      provenance "\n当前值（JSON " (plist-get info :type) "）: " (plist-get info :value)
+                      (when (plist-get origin :modified)
+                        "\n注意：HTML 源 buffer 有未保存修改，本地代码读取的是磁盘文件。")
+                      (if local-code "\n以下代码可直接读取本地文件验证。"
+                        (if web-code "\n以下代码需要已定义 response。" "\n以下代码需要已定义 data。"))))
+             "\n\n" (or local-code web-code print-code)
+             (when (and local-code web-code)
+               (concat "\n" (my/json-reference-comment (concat "网页请求版本（已有 response；按 c 复制）\n" web-code)) "\n"))
+             "\n" (my/json-reference-comment
+                      (concat "完整取值表达式（按 y 复制）\n" expression)) "\n")))
+      (setq info (append info (list :print-code print-code :web-code web-code :local-code local-code :code-text text)))
+      (let ((items (my/json-diagram-items info)) (source (current-buffer)))
+        (my/combobulate-display-structure "" "JSON diagram")
+        (setq-local my/json-reference-info info
+                    my/json-diagram-items items
+                    my/json-diagram-source source
+                    my/json-diagram-source-tick (buffer-chars-modified-tick source)
+                    my/json-diagram-origin origin)
+        (my/json-reference-mode 1)
+        (visual-line-mode 1)
+        (my/json-diagram-redraw))))
+
+  (defun my/combobulate-show-ancestors (&optional raw)
+    "Show a JSON Python reference, or syntax ancestry with prefix RAW."
+    (interactive "P")
     (unless (derived-mode-p 'json-ts-mode 'html-ts-mode 'python-mode 'python-ts-mode)
       (user-error "Use this command in a JSON, HTML or Python buffer"))
-    (require 'combobulate)
-    (unless (combobulate-read minor-mode) (combobulate-mode))
-    (my/combobulate-display-structure (my/combobulate-ancestor-text) "Ancestors"))
+    (if (and (derived-mode-p 'json-ts-mode) (not raw))
+        (my/json-show-python-reference)
+      (require 'combobulate)
+      (unless (combobulate-read minor-mode) (combobulate-mode))
+      (my/combobulate-display-structure (my/combobulate-ancestor-text) "Ancestors")))
 
   (defun my/combobulate-meow-setup ()
     "Add local structural keys, and HTML/JSON whole-buffer formatting."
@@ -1648,6 +2495,48 @@ Always prompt if multiple scripts exist, regardless of point.  q returns
                 ("C-c s s" . my/combobulate-show-structure)
                 ("C-c s p" . my/combobulate-show-ancestors)))
 
+  (defun my/python-space-completed-keyword (begin candidate)
+    "Space a completed Python NAME= at BEGIN without rewriting its value."
+    (save-match-data
+      (when (and (marker-buffer begin) (stringp candidate)
+                 (string-match "\\`\\([[:alpha:]_][[:alnum:]_]*\\)=\\'" candidate))
+        (let ((name (match-string-no-properties 1 candidate)))
+          (with-current-buffer (marker-buffer begin)
+            (when (derived-mode-p 'python-mode 'python-ts-mode)
+              (let ((position (copy-marker (point) t)))
+                (unwind-protect
+                    (save-excursion
+                      (goto-char begin)
+                      (when (and (not (nth 8 (syntax-ppss)))
+                                 (looking-at (concat (regexp-quote name) "[ \t]*=[ \t]*")))
+                        (goto-char (+ begin (length name)))
+                        ;; Preserve the identifier, =, value and snippet markers.
+                        (atomic-change-group
+                          (delete-horizontal-space)
+                          (insert " ")
+                          (forward-char 1)
+                          (delete-horizontal-space)
+                          (insert " "))))
+                  (goto-char position)
+                  (set-marker position nil)))))))))
+
+  (defun my/python-keyword-capf-spacing (capf)
+    "Wrap Python Eglot's CAPF exit, after text edits/snippets have run."
+    (if (not (and capf (derived-mode-p 'python-mode 'python-ts-mode))) capf
+      (let* ((begin (copy-marker (nth 0 capf)))
+             (properties (copy-sequence (nthcdr 3 capf)))
+             (exit (plist-get properties :exit-function)))
+        (append
+         (list (nth 0 capf) (nth 1 capf) (nth 2 capf))
+         (plist-put
+          properties :exit-function
+          (lambda (candidate status)
+            (unwind-protect
+                (prog1 (when exit (funcall exit candidate status))
+                  (when (memq status '(finished exact))
+                    (my/python-space-completed-keyword begin candidate)))
+              (when (memq status '(finished exact)) (set-marker begin nil)))))))))
+
   (use-package eglot
     :ensure nil
     :hook ((python-mode . eglot-ensure)
@@ -1655,7 +2544,9 @@ Always prompt if multiple scripts exist, regardless of point.  q returns
     :config
     (add-to-list 'eglot-server-programs
                  '((python-mode python-ts-mode)
-                   . ("basedpyright-langserver" "--stdio"))))
+                   . ("basedpyright-langserver" "--stdio")))
+    (advice-add 'eglot-completion-at-point :filter-return
+                #'my/python-keyword-capf-spacing))
 
   (defun my/python-meow-setup ()
     "Give Python a buffer-local SPC c c leader without C-c C-c collisions."
