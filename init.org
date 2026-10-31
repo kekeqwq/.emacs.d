@@ -589,121 +589,21 @@ Cape 提供额外的 =completion-at-point= 后端函数，如 dabbrev（动态�
   (global-hl-line-mode 1))
 #+end_src
 
-** 自适应原生 modeline
+** Doom Modeline 原版
 
-不依赖外部 modeline 包。每个窗口按自己的实际宽度排版，优先显示
-Meow 状态、修改/只读标记、文件名、=行:列=；文件名过长时从中间缩略。
-有余量才加入模式、Notebook/cell、LSP、进程/诊断、Git、编码与滚动位置。
-=*=: 已修改，=R=: 只读，=-=: 未修改。悬浮 modeline 可查看完整信息。
+保留 =doom-modeline= 原版布局及图标；仅关闭语言运行时版本号（如 Python 版本），
+给错误/警告计数留出空间，不重写分段或其他样式。
+图标字体 =Symbols Nerd Font Mono= 由 flakes 安装；不替换正文或 Org 字体。
 
 #+begin_src emacs-lisp
-  (defun my/modeline-fit (text width)
-    "Fit TEXT in WIDTH display columns, preserving both ends when truncated."
-    (setq width (max 0 width))
-    (cond ((<= (string-width text) width) text)
-          ((= width 0) "")
-          ((= width 1) "…")
-          (t
-           (let* ((tail (min 8 (/ (1- width) 3)))
-                  (head (- width tail 1))
-                  (total (string-width text)))
-             (concat (truncate-string-to-width text head)
-                     "…"
-                     (truncate-string-to-width text total (- total tail)))))))
-
-  (defun my/modeline-name ()
-    "Return a useful name, including for virtual notebook/JSON/tree views."
-    (let ((source
-           (cond
-            ((and (bound-and-true-p my/org-notebook-cell-edit-mode)
-                  (fboundp 'org-src-source-buffer))
-             (ignore-errors (org-src-source-buffer)))
-            ((bound-and-true-p my/html-json-source-buffer))
-            ((bound-and-true-p my/combobulate-structure-source)))))
-      (if (buffer-live-p source)
-          (with-current-buffer source
-            (if buffer-file-name (file-name-nondirectory buffer-file-name) (buffer-name)))
-        (if buffer-file-name (file-name-nondirectory buffer-file-name) (buffer-name)))))
-
-  (defun my/modeline-mode-label ()
-    (concat
-     (pcase major-mode
-       ((or 'python-mode 'python-ts-mode) "Py")
-       ('json-ts-mode "JSON") ('html-ts-mode "HTML")
-       ('org-mode "Org") ('emacs-lisp-mode "Elisp")
-       (_ (string-remove-suffix "-mode" (symbol-name major-mode))))
-     (cond ((bound-and-true-p my/org-notebook-cell-edit-mode) ":Cell")
-           ((bound-and-true-p my/org-notebook-mode) ":NB")
-           ((bound-and-true-p my/combobulate-structure-view-mode) ":Tree")
-           (t ""))))
-
-  (defun my/modeline-help (window _object _position)
-    "Show native full status on demand rather than crowding narrow windows."
-    (when (window-live-p window)
-      (with-current-buffer (window-buffer window)
-        (format "%s\n%s\n%s\n%s\n*: modified · R: read-only · position: line:column (column starts at 0)"
-                (buffer-name) (or buffer-file-name default-directory)
-                (format-mode-line mode-line-modes nil window)
-                (format-mode-line '(vc-mode "  " mode-line-process "  " "%Z") nil window)))))
-
-  (defun my/modeline-layout (width state flags name position extras)
-    "Render a single line, reserving POSITION and identity before EXTRAS."
-    (let* ((budget (max 1 (- width 2)))
-           (prefix (concat (when state
-                             (propertize (if (< width 28) state (concat "[" state "]"))
-                                         'face 'mode-line-emphasis))
-                           (propertize flags 'face (if (string-match-p "[*R]" flags)
-                                                       'warning 'mode-line))
-                           " "))
-           (minimum-name (min 12 (string-width name)))
-           (selected ""))
-      (dolist (extra extras)
-        (when (and (stringp extra) (not (string-empty-p extra))
-                   (<= (+ (string-width prefix) minimum-name
-                          (string-width selected) 1 (string-width extra)
-                          1 (string-width position)) budget))
-          (setq selected (concat selected " " extra))))
-      (let* ((name-width (max 1 (- budget (string-width prefix)
-                                   (string-width selected) (string-width position) 1)))
-             (fitted (propertize (my/modeline-fit name name-width)
-                                'face 'mode-line-buffer-id))
-             (gap (max 1 (- budget (string-width prefix) (string-width fitted)
-                            (string-width selected) (string-width position))))
-             (line (concat " " prefix fitted selected (make-string gap ?\s) position " ")))
-        ;; Only impossibly small windows (< identity + position) need a final clip.
-        (propertize (if (> (string-width line) width) (my/modeline-fit line width) line)
-                    'help-echo #'my/modeline-help))))
-
-  (defun my/modeline-render ()
-    "Use the window currently being rendered, not a fixed frame-width threshold."
-    (let* ((window (selected-window))
-           (width (window-total-width window))
-           (state (cond ((bound-and-true-p meow-keypad-mode) "K")
-                        ((bound-and-true-p meow-beacon-mode) "B")
-                        ((bound-and-true-p meow-insert-mode) "I")
-                        ((bound-and-true-p meow-normal-mode) "N")
-                        ((bound-and-true-p meow-motion-mode) "M")))
-           (flags (concat (if (buffer-modified-p) "*" "-")
-                          (when buffer-read-only "R")))
-           (name (replace-regexp-in-string "[\n\r\t]" " " (my/modeline-name)))
-           (position (format-mode-line "%l:%c" nil window))
-           (extras (list (my/modeline-fit (my/modeline-mode-label) 18)
-                         (when (bound-and-true-p eglot--managed-mode) "LSP")
-                         (when (>= width 60)
-                           (my/modeline-fit (string-trim (format-mode-line mode-line-process nil window)) 22))
-                         (when (and (>= width 70) (bound-and-true-p vc-mode))
-                           (my/modeline-fit (string-trim (format-mode-line vc-mode nil window)) 20))
-                         (when (>= width 80) (format-mode-line "%Z" nil window))
-                         (when (>= width 90) (string-trim (format-mode-line "%p" nil window))))))
-      ;; Escape literal % in filenames/status; native mode-line formatting will
-      ;; interpret the returned string once more.  No packages are loaded here.
-      (replace-regexp-in-string
-       "%" "%%" (my/modeline-layout width state flags name position extras) t t)))
-
-  (line-number-mode 1)
-  (column-number-mode 1)
-  (setq-default mode-line-format '("%e" (:eval (my/modeline-render))))
-  (force-mode-line-update t)
+  (use-package doom-modeline
+    :demand t
+    :init
+    (setq doom-modeline-env-version nil)
+    :config
+    (line-number-mode 1)
+    (column-number-mode 1)
+    (doom-modeline-mode 1))
 #+end_src
 
 ** 缩进层级与彩虹括号
@@ -942,6 +842,131 @@ Org-modern 让 Org-mode 拥有更现代化的视觉效果：美化标题标记�
       (when modern (org-modern-mode 1)))
     (valign-mode 1)))
 
+(defvar-local my/org-table-focus-state nil
+  "Saved truncation and window scroll settings while focusing an Org table.")
+
+(defun my/org-table-focus-restore ()
+  "Restore the display settings saved on entering a table."
+  (when my/org-table-focus-state
+    (let ((state my/org-table-focus-state))
+      (setq my/org-table-focus-state nil)
+      (setq-local truncate-lines (car state))
+      (dolist (window (get-buffer-window-list (current-buffer) nil t))
+        (set-window-hscroll window (or (cdr (assq window (cadr state))) 0))))
+    (force-window-update (current-buffer))))
+
+(defvar-local my/org-table-focus-layout nil)
+(defvar-local my/org-table-focus-needs-align nil)
+(defvar my/org-table-focus-timer nil)
+
+(defun my/org-table-visible-layout ()
+  "Return (WINDOW . TABLE-STARTS) for windows showing real Org tables."
+  (let (layout)
+    (dolist (window (get-buffer-window-list (current-buffer) nil t))
+      (when (or (eq window (selected-window))
+                (eq (frame-visible-p (window-frame window)) t))
+        (save-excursion
+          (goto-char (max (point-min) (window-start window)))
+          (beginning-of-line)
+          (let ((end (min (point-max) (or (window-end window t) (point-max)))) tables)
+            (while (re-search-forward "^[ \t]*|" end t)
+              (unless (or (invisible-p (line-beginning-position)) (org-in-src-block-p))
+                (push (org-table-begin) tables)
+                (goto-char (min end (org-table-end)))))
+            (when tables (push (cons window (nreverse tables)) layout))))))
+    (nreverse layout)))
+
+(defun my/org-table-focus-schedule (&rest _)
+  "Defer alignment until redisplay/window resizing has completed."
+  (when (timerp my/org-table-focus-timer) (cancel-timer my/org-table-focus-timer))
+  (setq my/org-table-focus-timer
+        (run-with-idle-timer
+         0.1 nil
+         (lambda ()
+           (setq my/org-table-focus-timer nil)
+           (let (seen)
+             (walk-windows
+              (lambda (window)
+                (let ((buffer (window-buffer window)))
+                  (unless (memq buffer seen)
+                    (push buffer seen)
+                    (when (buffer-local-value 'my/org-table-focus-mode buffer)
+                      (with-selected-window window (my/org-table-focus-update t))))))
+              'no-minibuf 'visible))))))
+
+(defun my/org-table-focus-update (&optional align-now)
+  "Keep visible tables unwrapped, even when point is in prose or code."
+  (when (derived-mode-p 'org-mode)
+    (let* ((layout (my/org-table-visible-layout))
+           (key (mapcar (lambda (entry)
+                          (list (car entry) (window-body-width (car entry) t)
+                                (window-body-height (car entry) t) (cdr entry))) layout)))
+      (if layout
+          (progn
+            (unless my/org-table-focus-state
+              (setq my/org-table-focus-state
+                    (list truncate-lines
+                          (mapcar (lambda (window) (cons window (window-hscroll window)))
+                                  (get-buffer-window-list (current-buffer) nil t)))))
+            (setq-local truncate-lines t))
+        (my/org-table-focus-restore)
+        (setq my/org-table-focus-needs-align nil))
+      (unless (equal key my/org-table-focus-layout)
+        (setq my/org-table-focus-layout key
+              my/org-table-focus-needs-align (and layout t))
+        (force-window-update (current-buffer))
+        (unless align-now (my/org-table-focus-schedule)))
+      (when (and align-now my/org-table-focus-needs-align
+                 (bound-and-true-p valign-mode))
+        (setq my/org-table-focus-needs-align nil)
+        (let (seen)
+          (dolist (entry layout)
+            (with-selected-window (car entry)
+              (save-excursion
+                (dolist (start (cdr entry))
+                  (unless (memq start seen)
+                    (push start seen)
+                    (goto-char start)
+                    (condition-case err
+                        (valign-table)
+                      (error (message "Org table display: %s" (error-message-string err))))))))))))))
+
+(defun my/org-valign-unclipped-width (original &rest arguments)
+  "Measure full cells, not only the part fitting inside the window.
+Valign's default X-LIMIT clips long fields, producing short right borders."
+  (if (not (derived-mode-p 'org-mode)) (apply original arguments)
+    (let ((measure (symbol-function 'window-text-pixel-size)))
+      (cl-letf (((symbol-function 'window-text-pixel-size)
+                 (lambda (&optional window from to _x-limit y-limit mode-lines ignore-end)
+                   (funcall measure window from to t y-limit mode-lines ignore-end))))
+        (apply original arguments)))))
+
+(with-eval-after-load 'valign
+  (advice-add 'valign--pixel-width-from-to :around #'my/org-valign-unclipped-width)
+  (advice-add 'valign--pixel-x :around #'my/org-valign-unclipped-width))
+(add-hook 'window-size-change-functions #'my/org-table-focus-schedule)
+(add-hook 'window-buffer-change-functions #'my/org-table-focus-schedule)
+
+(define-minor-mode my/org-table-focus-mode
+  "Keep visible Org tables on single screen rows without changing text."
+  :lighter nil :group 'org
+  (if my/org-table-focus-mode
+      (progn
+        (unless (derived-mode-p 'org-mode)
+          (setq my/org-table-focus-mode nil)
+          (user-error "This display mode is only for Org buffers"))
+        (add-hook 'post-command-hook #'my/org-table-focus-update 90 t)
+        (add-hook 'window-scroll-functions #'my/org-table-focus-schedule nil t)
+        (add-hook 'change-major-mode-hook #'my/org-table-focus-restore nil t)
+        (my/org-table-focus-update))
+    (remove-hook 'post-command-hook #'my/org-table-focus-update t)
+    (remove-hook 'window-scroll-functions #'my/org-table-focus-schedule t)
+    (remove-hook 'change-major-mode-hook #'my/org-table-focus-restore t)
+    (setq my/org-table-focus-layout nil my/org-table-focus-needs-align nil)
+    (my/org-table-focus-restore)))
+
+(add-hook 'org-mode-hook #'my/org-table-focus-mode t)
+
 (use-package org-modern
   :config
   ;; 添加窗口边框和分隔线
@@ -1003,6 +1028,13 @@ Org 中文使用 =LXGW WenKai Mono=（霞鹜文楷等宽版），英文始终保
 首次安装后重启 Emacs；已有 Org buffer 也可用 =M-x my/org-setup-cjk-font= 重设。
 若原表格文本尚未对齐，把光标放入表格按 =Tab= 或 =M-x org-table-align=；
 字体设置本身不改写文件或表格内容。
+
+表格出现在可见区域时自动禁止折行，超宽列可用 =C-x <= / =C-x >= 横向查看；
+不依赖光标是否在表格内。所有窗口都看不到表格时，恢复之前的正文换行及横向位置。
+窗口大小变化后自动重新对齐，测量完整单元格而非窗口内被截断的部分，防止右边框参差。
+源代码块里的竖线不触发此行为；不缩小字体，不修改文本。此开关作用于整个 buffer，
+所以表格可见期间，同 buffer 的正文及其他窗口也暂时不折行。
+=M-x my/org-table-focus-mode= 可关闭该自动切换。
 
 * Org 可见视图导出 PDF
 
