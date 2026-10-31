@@ -98,6 +98,44 @@
 (defvar-local my/json-diagram-origin nil)
 (defvar-local my/json-diagram-source-tick nil)
 (defvar-local my/json-diagram-drawing nil)
+(defvar-local my/json-diagram-code-p nil)
+(defvar my/json-diagram-resize-timer nil)
+
+(defun my/json-diagram-width ()
+  "Fit this buffer's visible windows, not the currently selected window.
+When the same diagram is displayed twice, fit the narrower window."
+  (let* ((windows (get-buffer-window-list (current-buffer) nil 'visible))
+         (widths (mapcar (lambda (window) (window-body-width window t)) windows)))
+    (max 160 (- (if widths (apply #'min widths) (window-body-width nil t)) 14))))
+
+(defun my/json-diagram-refresh-visible ()
+  "Reflow visible diagrams only when their available width changed."
+  (setq my/json-diagram-resize-timer nil)
+  (let (buffers)
+    (walk-windows (lambda (window) (cl-pushnew (window-buffer window) buffers)) 'no-minibuf 'visible)
+    (dolist (buffer buffers)
+      (with-current-buffer buffer
+        (when (and my/json-diagram-drawing (not my/json-diagram-code-p)
+                   (buffer-live-p my/json-diagram-source)
+                   (or (null my/json-diagram-source-tick)
+                       (= my/json-diagram-source-tick (buffer-chars-modified-tick my/json-diagram-source)))
+                   (/= (my/json-diagram-width) (plist-get my/json-diagram-drawing :width)))
+          (let ((window (get-buffer-window buffer 'visible)))
+            (when (window-live-p window)
+              (with-selected-window window
+                (condition-case err
+                    (my/json-diagram-redraw)
+                  (error (message "JSON diagram resize: %s" (error-message-string err))))))))))))
+
+(defun my/json-diagram-schedule-resize (&rest _)
+  "Debounce resize/split/buffer-display events outside redisplay."
+  (when (timerp my/json-diagram-resize-timer)
+    (cancel-timer my/json-diagram-resize-timer))
+  (setq my/json-diagram-resize-timer
+        (run-with-idle-timer 0.12 nil #'my/json-diagram-refresh-visible)))
+
+(add-hook 'window-size-change-functions #'my/json-diagram-schedule-resize)
+(add-hook 'window-buffer-change-functions #'my/json-diagram-schedule-resize)
 
 (defun my/json-diagram-svg (items origin source width)
   "Draw nested container boxes and a snake-shaped path with real hit targets."
@@ -114,7 +152,7 @@
          (fill (if dark "#313244" "#e6e9ef"))
          (accent (if dark "#89b4fa" "#1e66f5"))
          (muted (if dark "#a6adc8" "#6c6f85"))
-         (chars (max 12 (/ (- card-width 36) 10)))
+         (chars (max 8 (/ (- card-width 36) 10)))
          (tick (buffer-chars-modified-tick source))
          positions maps targets)
     (cl-labels
@@ -192,11 +230,12 @@
              (/= my/json-diagram-source-tick (buffer-chars-modified-tick my/json-diagram-source)))
     (user-error "Source JSON changed; reopen this diagram"))
   (let* ((drawing (my/json-diagram-svg my/json-diagram-items my/json-diagram-origin my/json-diagram-source
-                                      (max 300 (min 1500 (- (window-body-width nil t) 14)))))
+                                      (my/json-diagram-width)))
          (inhibit-read-only t)
          (map (copy-keymap my/json-reference-mode-map)))
     (setq my/json-diagram-targets (plist-get drawing :targets)
-          my/json-diagram-drawing drawing)
+          my/json-diagram-drawing drawing
+          my/json-diagram-code-p nil)
     (erase-buffer)
     (dolist (target my/json-diagram-targets)
       (let ((id (car target)))
@@ -231,12 +270,17 @@
     (cl-loop for item in my/json-diagram-items for i from 0
              when (and (stringp (plist-get item :key)) (> (string-width (plist-get item :key)) 38)) do
              (insert (format "\n\n节点 %d 的完整字符串键（单个键，不是额外字典层级）：\n%s\n" i (plist-get item :key))))
-    (insert "\nv：可选代码页 · g：恢复图示/按当前窗口重排 · s：导出 SVG · q：返回\n")
+    (insert "\n窗口变化自动重排 · v：可选代码页 · g：恢复图示 · s：导出 SVG · q：返回\n")
     (goto-char (point-min))
+    (dolist (window (get-buffer-window-list (current-buffer) nil 'visible))
+      (set-window-hscroll window 0)
+      (set-window-vscroll window 0 t)
+      (set-window-start window (point-min)))
     (set-buffer-modified-p nil)))
 
 (defun my/json-diagram-show-code ()
   (interactive)
+  (setq my/json-diagram-code-p t)
   (let ((inhibit-read-only t))
     (erase-buffer)
     (insert (plist-get my/json-reference-info :code-text))

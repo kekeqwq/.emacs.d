@@ -36,7 +36,9 @@ JSON 中默认显示 SVG 关系图：顶部居中显示源 HTML 文件与 script
 
 长键只在图上缩略，完整内容在下方说明或鼠标提示里；即使键本身是 JSON 字符串，
 也不把它误画成实际字典层级。=Tab= 选择下方节点链接，=Enter= 跳转；=g= 按当前
-窗口宽度重排。默认不再铺 Python 代码，=v= 才显示可选代码页，=g= 返回图示。
+窗口宽度重排；拖动窗口、分屏或把图移入不同大小窗口时也会自动重排，窄窗口
+改单列而非把文字缩得难以辨认，超出高度可滚动查看。默认不再铺 Python 代码，
+=v= 才显示可选代码页，=g= 返回图示。
 旧的表达式/网页解析/本地验证复制功能仍保留，但不是默认阅读内容。
 
 HTML/Python 中仍显示名称、语法节点类型、起始行列和可用字段名，不省略
@@ -61,6 +63,7 @@ HTML/Python 中仍显示名称、语法节点类型、起始行列和可用字�
 | 适用范围 | 普通模式 | 插入模式 | 功能 |
 |----------+----------+----------+------|
 | HTML / JSON | =SPC f f= | =C-c f f= | 使用 Prettier 格式化全文 |
+| Python / Notebook Python 编辑窗口 | =SPC f f= | =C-c f f= | 使用 Ruff 格式化全文 / 当前编辑单元，不执行或保存 |
 | 仅 HTML | =SPC j j= | =C-c j j= | 当前窗口打开内嵌 JSON 的独立只读阅读视图 |
 
 - 格式化在后台处理全文，即使存在选区或 narrowing；不自动保存，支持撤销，失败保留原文。
@@ -69,7 +72,10 @@ HTML/Python 中仍显示名称、语法节点类型、起始行列和可用字�
 - 大于 256 KiB 或有超过 4000 字符长行的 HTML/JSON 使用轻量显示：关闭缩进线、
   彩虹括号及 Combobulate 额外高亮，长行横向滚动，保留原文、基础语法色和结构导航。
   格式化不再无限时逐字符 diff，也不强制全文件立即高亮。阈值见 =my/web-large-buffer-threshold=。
-- 依赖 PATH 中的 =prettier=：Nix 系统由 flakes 安装，Windows 需手动安装。
+- 依赖 PATH 中的 =prettier= / =ruff=：Nix 系统由 flakes 安装，Windows 需手动安装。
+- Python 仅运行 =ruff format=，不整理导入、不做 lint 修复；遵循项目 Ruff 配置和标准格式
+  （例如调用中的关键字参数变为 =name=value=）。Notebook 只格式化 Python 编辑窗口，
+  不修改普通 Org；退出编辑窗口时按原有机制回写。Ruff 错误见 =*Ruff errors*=。
 - 内嵌 JSON 有多段时每次选择要查看的 script；原 HTML 不变，不创建 JSON 文件。
 - JSON 阅读视图可以继续使用结构导航、全文树和父级链；按 =q= 返回 HTML。
   它保持只读，不能直接用格式化指令改写快照或原 HTML。
@@ -84,9 +90,6 @@ HTML/Python 中仍显示名称、语法节点类型、起始行列和可用字�
 =C-x k= 关闭输出 buffer 时也会清理进程。程序自然结束后保留输出，方便阅读。
 这些关闭行为仅限此运行器创建的终端，不改变普通 Ghostel。
 Notebook 的 cell 编辑 buffer 使用下面的 cell 执行行为，不运行虚拟 =.py= 文件。
-Python 的 Eglot 参数补全确认后，~params=~ 会插入为 ~params =~，并在
-等号后保留一个空格，光标在该空格后；手动输入保持原样，不改其他语言，
-也不批量重排已有代码。
 
 ** Org Python Notebook：创建、执行与导航
 
@@ -440,7 +443,7 @@ Cape 提供额外的 =completion-at-point= 后端函数，如 dabbrev（动态�
 ** Tempel（Python 代码片段）
 
 纯 Elisp，通过 Elpaca 安装。模板直接保存在本段，不依赖外部模板文件。
-局部合并 Tempel 与 Eglot 候选，保留现有 Python 参数补全的等号空格规则；
+局部合并 Tempel 与 Eglot 候选，Python 参数补全保持 Eglot 原始格式；
 只为 Python buffer 设置 Tab 及片段字段键，不修改其他语言的补全键位。
 
 #+begin_src emacs-lisp
@@ -859,6 +862,86 @@ Org-modern 让 Org-mode 拥有更现代化的视觉效果：美化标题标记�
 标签、时间戳等，同时调整边框和分隔线的样式。
 
 #+begin_src emacs-lisp
+;; :fontset is supported by set-face-attribute on NAMED faces, not by
+;; anonymous face-remapping plists.  Keep it out of remapping specs.
+(defcustom my/org-cjk-font-family "LXGW WenKai Mono"
+  "Monospaced Chinese font for Org, at the existing text's pixel size."
+  :type 'string :group 'org)
+(defvar-local my/org-cjk-font-cookies nil)
+(defvar-local my/org-cjk-font-keywords nil) ; clean up any earlier trial rules
+(defvar my/org-cjk-fontsets (make-hash-table :test #'equal))
+(defface my/org-cjk-face '((t ())) "Org-only Chinese font mapping." :group 'org)
+(defface my/org-cjk-table-face '((t ())) "Org-only bilingual table font." :group 'org)
+
+(defun my/org-cjk-fontset (frame)
+  "Create a private Han fontset without changing the global fontset."
+  (require 'fontset)
+  (let* ((base (face-font 'default frame))
+         ;; Preserve the original visual size; do not enlarge Han glyphs
+         ;; to force a 2:1 ratio with MonoLisa's relatively wide Latin cells.
+         (pixels (font-get (face-attribute 'default :font frame) :size))
+         (key (list base my/org-cjk-font-family pixels)))
+    (or (gethash key my/org-cjk-fontsets)
+        (let ((set (create-fontset-from-ascii-font
+                    base nil (format "myorgsafe%d" (hash-table-count my/org-cjk-fontsets)))))
+          (dolist (characters '(han cjk-misc bopomofo (#x3000 . #x303f) (#xff00 . #xffef)))
+            (set-fontset-font set characters
+                              (font-spec :family my/org-cjk-font-family :size pixels)))
+          (puthash key set my/org-cjk-fontsets)))))
+(defvar my/org-cjk-font-warning-shown nil)
+
+(defun my/org-clear-cjk-font ()
+  "Remove only this feature's local font rules, including older mappings."
+  (require 'face-remap)
+  (mapc #'face-remap-remove-relative my/org-cjk-font-cookies)
+  (setq my/org-cjk-font-cookies nil)
+  (when my/org-cjk-font-keywords
+    (font-lock-remove-keywords nil my/org-cjk-font-keywords)
+    (setq my/org-cjk-font-keywords nil)))
+
+(defun my/org-setup-cjk-font ()
+  "Use named font faces in Org; leave other modes and default faces alone."
+  (interactive)
+  (when (derived-mode-p 'org-mode)
+    (my/org-clear-cjk-font)
+    (condition-case err
+        (when (display-graphic-p)
+          (if (member my/org-cjk-font-family (font-family-list))
+              (let ((fontset (my/org-cjk-fontset (selected-frame))))
+                (set-face-attribute 'my/org-cjk-face nil :fontset fontset)
+                (set-face-attribute 'my/org-cjk-table-face nil :fontset fontset
+                                    :family 'unspecified
+                                    :height 1.0 :weight 'normal :slant 'normal)
+                (push (face-remap-add-relative 'default 'my/org-cjk-face)
+                      my/org-cjk-font-cookies)
+                (push (face-remap-add-relative 'org-table 'my/org-cjk-table-face)
+                      my/org-cjk-font-cookies))
+            (unless my/org-cjk-font-warning-shown
+              (setq my/org-cjk-font-warning-shown t)
+              (message "Org: install %s via flakes fonts.packages" my/org-cjk-font-family))))
+      (error
+       (my/org-clear-cjk-font)
+       (message "Org CJK font skipped: %s" (error-message-string err))))
+    (when font-lock-mode (font-lock-flush))))
+
+;; Migrate away from the previous width workaround.  Valign aligns the
+;; displayed cells directly and never needs to rewrite Org's measuring code.
+(with-eval-after-load 'org
+  (advice-remove 'org-string-width #'my/org-cjk-string-width))
+(add-hook 'org-mode-hook #'my/org-setup-cjk-font)
+
+(defun my/org-enable-pixel-tables ()
+  "Align Org tables without changing font size or file contents."
+  (when (and (derived-mode-p 'org-mode) (display-graphic-p))
+    ;; Valign owns only the table bars/padding; keep all other Org Modern
+    ;; features.  Do not let both packages write display properties on bars.
+    (let ((modern (bound-and-true-p org-modern-mode)))
+      (when modern (org-modern-mode -1))
+      (setq-local org-modern-table nil)
+      (setq-local valign-fancy-bar t)
+      (when modern (org-modern-mode 1)))
+    (valign-mode 1)))
+
 (use-package org-modern
   :config
   ;; 添加窗口边框和分隔线
@@ -894,7 +977,32 @@ Org-modern 让 Org-mode 拥有更现代化的视觉效果：美化标题标记�
   (set-face-attribute 'org-ellipsis nil :inherit 'default :box nil)
 
   (global-org-modern-mode))
+
+(use-package valign
+  :after (org org-modern)
+  :demand t
+  :config
+  ;; Limit work on unusually large tables; normal notes use pixel alignment.
+  (setq valign-max-table-size 20000
+        valign-lighter "")
+  (add-hook 'org-mode-hook #'my/org-enable-pixel-tables t)
+  (dolist (buffer (buffer-list))
+    (with-current-buffer buffer
+      (when (derived-mode-p 'org-mode) (my/org-enable-pixel-tables)))))
 #+end_src
+
+* Org 中文字体与表格对齐
+
+Org 中文使用 =LXGW WenKai Mono=（霞鹜文楷等宽版），英文始终保留原字体。
+中文保持与原文字相同的像素字号，不再为了凑两倍英文字宽而放大；英文字体、
+配色与代码块样式保持原样。使用命名 face 保存私有字体映射，重映射列表不含
+不受支持的 =:fontset= 属性。表格由 =valign= 按实际像素对齐，用显示间距补齐列宽，
+不改写表格文本。仅表格的竖线由 valign 绘制，Org Modern 其他美化继续保留。
+设置仅在 Org buffer 中生效，不改变 Python、JSON、终端等显示。
+字体由 flakes 的 =fonts.packages= 安装，Windows 需手动安装同名字体。
+首次安装后重启 Emacs；已有 Org buffer 也可用 =M-x my/org-setup-cjk-font= 重设。
+若原表格文本尚未对齐，把光标放入表格按 =Tab= 或 =M-x org-table-align=；
+字体设置本身不改写文件或表格内容。
 
 * Org 可见视图导出 PDF
 
@@ -1802,7 +1910,7 @@ buffer 的 Combobulate 结构树（不截断为光标附近的几层）；=q= �
 生成视图时记录原文件路径，关闭中间阅读 buffer 后仍可导出。
 
 =SPC s p=（编辑模式 =C-c s p=）在 JSON 中显示方括号节点、嵌套容器和箭头，
-顶部居中显示可点击的原 HTML 标签。点击节点返回 JSON 对应位置；=g= 重排，
+顶部居中显示可点击的原 HTML 标签，窗口大小变化时自动重排。点击节点返回 JSON 对应位置；=g= 重排，
 =v= 查看可选代码，=s= 导出 SVG。渲染器在 =lisp/my-json-diagram.el=，纯内置 SVG，
 不需要 Graphviz 或浏览器渲染。=y= / =p= 与 =c= / =l= 仍可复制表达式、print、
 网页解析及本地验证代码。HTML/Python 保留原父级链；JSON 加 =C-u= 前缀可查看
@@ -1839,7 +1947,10 @@ Windows 需手动安装并放入 PATH。
     :mode "\\.typ\\'")
 
   (defvar-local my/web-format-process nil
-    "Current asynchronous Prettier job for this buffer.")
+    "Current asynchronous Prettier/Ruff job for this buffer.")
+
+  (defun my/web-format-label (process)
+    (or (process-get process 'my/formatter-label) "Prettier"))
 
   (defun my/web-format-cancel ()
     "Cancel this buffer's pending formatter without applying partial output."
@@ -1864,12 +1975,12 @@ Windows 需手动安装并放入 PATH。
                     (error "%s" (with-current-buffer errors (string-trim (buffer-string)))))
                    ((/= tick (buffer-chars-modified-tick))
                     (process-put process 'my/web-format-state 'stale)
-                    (message "Prettier: %s changed while formatting; nothing overwritten, please retry" (buffer-name)))
+                    (message "%s: %s changed while formatting; nothing overwritten, please retry" (my/web-format-label process) (buffer-name)))
                    (t
                     (barf-if-buffer-read-only)
                     (save-restriction
                       (widen)
-                      (my/web-maybe-lighten)
+                      (when (derived-mode-p 'html-ts-mode 'json-ts-mode) (my/web-maybe-lighten))
                       (let ((position (point))
                             (inhibit-redisplay t))
                         (atomic-change-group
@@ -1881,29 +1992,34 @@ Windows 需手动安装并放入 PATH。
                         (goto-char (min (point-max) (max (point-min) position))))
                       (when font-lock-mode (font-lock-flush)))
                     (process-put process 'my/web-format-state 'done)
-                    (message "Prettier: formatted %s (not saved)" (buffer-name))))
+                    (message "%s: formatted %s (not saved)" (my/web-format-label process) (buffer-name))))
                 (error
                  (process-put process 'my/web-format-state 'error)
-                 (with-current-buffer (get-buffer-create "*Prettier errors*")
-                   (let ((inhibit-read-only t))
-                     (erase-buffer)
-                     (insert (error-message-string err))
-                     (special-mode)))
-                 (message "Prettier failed; original buffer retained. See *Prettier errors*")))))
+                 (let ((errors-name (format "*%s errors*" (my/web-format-label process))))
+                   (with-current-buffer (get-buffer-create errors-name)
+                     (let ((inhibit-read-only t))
+                       (erase-buffer)
+                       (insert (error-message-string err))
+                       (special-mode)))
+                   (message "%s failed; original buffer retained. See %s" (my/web-format-label process) errors-name))))))
         (let ((kill-buffer-query-functions nil))
           (dolist (buffer (list output errors))
             (when (buffer-live-p buffer) (kill-buffer buffer)))))))
 
   (defun my/web-format-buffer ()
-    "Format the entire HTML/JSON buffer asynchronously, without saving it."
+    "Format HTML/JSON with Prettier or Python with Ruff, without saving."
     (interactive)
     (barf-if-buffer-read-only)
     (let* ((parser (cond ((derived-mode-p 'html-ts-mode) "html")
                          ((derived-mode-p 'json-ts-mode) "json")
-                         (t (user-error "Use this command in an HTML or JSON buffer"))))
-           (program (or (executable-find "prettier")
-                        (user-error "Prettier is not on PATH; install it via flakes (Windows: install manually)")))
-           (filename (or buffer-file-name (expand-file-name (concat "untitled." parser))))
+                         ((derived-mode-p 'python-mode 'python-ts-mode) "python")
+                         (t (user-error "Use this command in an HTML, JSON or Python buffer"))))
+           (python (equal parser "python"))
+           (tool (if python "ruff" "prettier"))
+           (label (if python "Ruff" "Prettier"))
+           (program (or (executable-find tool)
+                        (user-error "%s is not on PATH; install it via flakes (Windows: install manually)" label)))
+           (filename (or buffer-file-name (expand-file-name (concat "untitled." (if python "py" parser)))))
            (source (current-buffer))
            (tick (buffer-chars-modified-tick))
            (output (generate-new-buffer " *prettier-output*"))
@@ -1914,18 +2030,20 @@ Windows 需手动安装并放入 PATH。
           (progn
             (setq process
                   (make-process
-                   :name "prettier" :buffer output :stderr errors :noquery t
+                   :name tool :buffer output :stderr errors :noquery t
                    :connection-type 'pipe :coding '(utf-8-unix . utf-8-unix)
-                   :command (list program "--parser" parser "--stdin-filepath" filename)
+                   :command (if python (list program "format" "--stdin-filename" filename "-")
+                              (list program "--parser" parser "--stdin-filepath" filename))
                    :sentinel (apply-partially #'my/web-format-finished source tick output errors)))
             (setq my/web-format-process process)
+            (process-put process 'my/formatter-label label)
             (process-put process 'my/web-format-state 'running)
             (add-hook 'kill-buffer-hook #'my/web-format-cancel nil t)
             (save-restriction
               (widen)
               (process-send-region process (point-min) (point-max)))
             (process-send-eof process)
-            (message "Prettier: formatting %s in background…" (buffer-name))
+            (message "%s: formatting %s in background…" label (buffer-name))
             process)
         (error
          (setq my/web-format-process nil)
@@ -1933,6 +2051,12 @@ Windows 需手动安装并放入 PATH。
          (dolist (buffer (list output errors))
            (when (buffer-live-p buffer) (kill-buffer buffer)))
          (signal (car err) (cdr err))))))
+
+  (defun my/python-format-buffer ()
+    "Format this Python buffer/cell with Ruff, without saving or executing."
+    (interactive)
+    (unless (derived-mode-p 'python-mode 'python-ts-mode) (user-error "Not a Python buffer"))
+    (my/web-format-buffer))
 
   ;;; HTML: use the existing automatic tree-sitter grammar installation.
   (use-package html-ts-mode
@@ -2453,7 +2577,7 @@ Always prompt if multiple scripts exist, regardless of point.  q returns
       (my/combobulate-display-structure (my/combobulate-ancestor-text) "Ancestors")))
 
   (defun my/combobulate-meow-setup ()
-    "Add local structural keys, and HTML/JSON whole-buffer formatting."
+    "Add local structural keys and HTML/JSON/Python formatting."
     (let ((leader (make-sparse-keymap))
           (structure-map (make-sparse-keymap)))
       (set-keymap-parent leader (meow--get-leader-keymap))
@@ -2464,10 +2588,11 @@ Always prompt if multiple scripts exist, regardless of point.  q returns
       (define-key structure-map (kbd "p") #'my/combobulate-show-ancestors)
       (define-key structure-map (kbd "C-p") #'my/combobulate-show-ancestors)
       (define-key leader (kbd "s") structure-map)
-      (when (derived-mode-p 'html-ts-mode 'json-ts-mode)
-        (let ((format-map (make-sparse-keymap)))
-          (define-key format-map (kbd "f") #'my/web-format-buffer)
-          (define-key format-map (kbd "C-f") #'my/web-format-buffer)
+      (when (derived-mode-p 'html-ts-mode 'json-ts-mode 'python-mode 'python-ts-mode)
+        (let ((format-map (make-sparse-keymap))
+              (formatter (if (derived-mode-p 'python-mode 'python-ts-mode) #'my/python-format-buffer #'my/web-format-buffer)))
+          (define-key format-map (kbd "f") formatter)
+          (define-key format-map (kbd "C-f") formatter)
           (define-key leader (kbd "f") format-map)))
       (setq-local meow-keypad-leader-dispatch leader)))
 
@@ -2483,59 +2608,19 @@ Always prompt if multiple scripts exist, regardless of point.  q returns
     :custom
     (python-shell-interpreter (if (eq system-type 'windows-nt) "python" "python3"))
     :bind (:map python-mode-map
+                ("C-c f f" . my/python-format-buffer)
                 ("C-c c c" . my/python-run-ghostel)
                 ("C-c <up>" . combobulate-navigate-up)
                 ("C-c <down>" . combobulate-navigate-down)
                 ("C-c s s" . my/combobulate-show-structure)
                 ("C-c s p" . my/combobulate-show-ancestors)
            :map python-ts-mode-map
+                ("C-c f f" . my/python-format-buffer)
                 ("C-c c c" . my/python-run-ghostel)
                 ("C-c <up>" . combobulate-navigate-up)
                 ("C-c <down>" . combobulate-navigate-down)
                 ("C-c s s" . my/combobulate-show-structure)
                 ("C-c s p" . my/combobulate-show-ancestors)))
-
-  (defun my/python-space-completed-keyword (begin candidate)
-    "Space a completed Python NAME= at BEGIN without rewriting its value."
-    (save-match-data
-      (when (and (marker-buffer begin) (stringp candidate)
-                 (string-match "\\`\\([[:alpha:]_][[:alnum:]_]*\\)=\\'" candidate))
-        (let ((name (match-string-no-properties 1 candidate)))
-          (with-current-buffer (marker-buffer begin)
-            (when (derived-mode-p 'python-mode 'python-ts-mode)
-              (let ((position (copy-marker (point) t)))
-                (unwind-protect
-                    (save-excursion
-                      (goto-char begin)
-                      (when (and (not (nth 8 (syntax-ppss)))
-                                 (looking-at (concat (regexp-quote name) "[ \t]*=[ \t]*")))
-                        (goto-char (+ begin (length name)))
-                        ;; Preserve the identifier, =, value and snippet markers.
-                        (atomic-change-group
-                          (delete-horizontal-space)
-                          (insert " ")
-                          (forward-char 1)
-                          (delete-horizontal-space)
-                          (insert " "))))
-                  (goto-char position)
-                  (set-marker position nil)))))))))
-
-  (defun my/python-keyword-capf-spacing (capf)
-    "Wrap Python Eglot's CAPF exit, after text edits/snippets have run."
-    (if (not (and capf (derived-mode-p 'python-mode 'python-ts-mode))) capf
-      (let* ((begin (copy-marker (nth 0 capf)))
-             (properties (copy-sequence (nthcdr 3 capf)))
-             (exit (plist-get properties :exit-function)))
-        (append
-         (list (nth 0 capf) (nth 1 capf) (nth 2 capf))
-         (plist-put
-          properties :exit-function
-          (lambda (candidate status)
-            (unwind-protect
-                (prog1 (when exit (funcall exit candidate status))
-                  (when (memq status '(finished exact))
-                    (my/python-space-completed-keyword begin candidate)))
-              (when (memq status '(finished exact)) (set-marker begin nil)))))))))
 
   (use-package eglot
     :ensure nil
@@ -2544,9 +2629,7 @@ Always prompt if multiple scripts exist, regardless of point.  q returns
     :config
     (add-to-list 'eglot-server-programs
                  '((python-mode python-ts-mode)
-                   . ("basedpyright-langserver" "--stdio")))
-    (advice-add 'eglot-completion-at-point :filter-return
-                #'my/python-keyword-capf-spacing))
+                   . ("basedpyright-langserver" "--stdio"))))
 
   (defun my/python-meow-setup ()
     "Give Python a buffer-local SPC c c leader without C-c C-c collisions."
