@@ -1030,11 +1030,13 @@ Org 中文使用 =LXGW WenKai Mono=（霞鹜文楷等宽版），英文始终保
 字体设置本身不改写文件或表格内容。
 
 表格出现在可见区域时自动禁止折行，超宽列可用 =C-x <= / =C-x >= 横向查看；
-不依赖光标是否在表格内。所有窗口都看不到表格时，恢复之前的正文换行及横向位置。
+不依赖光标是否在表格内。所有窗口都看不到表格时，恢复正文按字符贴边折行及之前的横向位置。
 窗口大小变化后自动重新对齐，测量完整单元格而非窗口内被截断的部分，防止右边框参差。
 源代码块里的竖线不触发此行为；不缩小字体，不修改文本。此开关作用于整个 buffer，
 所以表格可见期间，同 buffer 的正文及其他窗口也暂时不折行。
 =M-x my/org-table-focus-mode= 可关闭该自动切换。
+Org 正文与普通代码 buffer 一样按字符贴边折行，并显示左右边缘的折行箭头；
+不再启用按词换行的 =visual-line-mode=。此设置不启用 Org 内的代码缩进竖线。
 
 * Org 可见视图导出 PDF
 
@@ -1787,9 +1789,24 @@ finally:
     (org-babel-next-src-block)
     (my/org-notebook--enter-cell))
 
+  (defun my/org-window-wrap-setup ()
+    "Use character wrapping and fringe continuation arrows, like code buffers."
+    (when (bound-and-true-p visual-line-mode) (visual-line-mode -1))
+    (setq-local word-wrap nil)
+    (setq-local fringe-indicator-alist
+                (cons '(continuation left-curly-arrow right-curly-arrow)
+                      (assq-delete-all 'continuation (copy-tree fringe-indicator-alist))))
+    ;; A visible table still owns truncation; only reset its prose baseline.
+    (if (bound-and-true-p my/org-table-focus-state)
+        (progn (setcar my/org-table-focus-state nil) (setq-local truncate-lines t))
+      (setq-local truncate-lines nil))
+    (when (bound-and-true-p my/org-table-focus-mode)
+      (setq my/org-table-focus-layout nil)
+      (my/org-table-focus-update)))
+
   (use-package org
     :ensure nil
-    :hook ((org-mode . visual-line-mode)
+    :hook ((org-mode . my/org-window-wrap-setup)
            (org-mode . my/org-notebook-detect)
            (org-src-mode . my/org-notebook-python-edit-setup))
     :config
