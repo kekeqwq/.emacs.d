@@ -110,9 +110,14 @@ Notebook 的 cell 编辑 buffer 使用下面的 cell 执行行为，不运行虚
 | =SPC n c= | =C-c n c= | 清除当前 cell 结果 |
 | =SPC n s= | =C-c n s= | 确认后重启默认 Python 会话，清空共享变量 |
 
-另有 =Ctrl+Enter= 执行并停留、=Shift+Enter= 执行后进入下一 cell；终端
-若不能区分这两种组合键，就使用表中的 =n r= / =n x=。普通模式在 cell 上
+=Ctrl+Enter= 和 =Shift+Enter= 均执行当前 cell 并停留原处，不自动跳转或新增。
+终端若不能区分组合键，使用 =n r=；手动跳转用 =n j= / =n k=。
+=n x= 仍保留为显式的“执行并进入下一 cell”命令。普通模式在 cell 上
 直接按 =Enter= 也能进入 Python 编辑；插入模式的 Enter 仍用于 Org 换行。
+
+Notebook 正文按字面显示下划线、上标符号及行内标记，不把 =seen_urls_list= 等名称
+渲染成下标，也不额外转换粗斜体或特殊字符。标题、列表、表格、代码块高亮仍保留；
+关闭 Notebook 模式会恢复该 buffer 原有的 Org 字符显示设置，普通 Org 文件不受影响。
 
 Notebook 每个文件默认一个 Python 会话，cell 间共享变量。输出、stderr
 及 Python 异常显示在原地 =#+RESULTS= 中，重跑替换旧结果；执行失败时
@@ -1263,7 +1268,7 @@ cell，不把父进程变量假装成共享内存；daemon 后台子进程建议
 | Meow 普通模式 | 编辑模式 | 操作 |
 |---------------+----------+------|
 | =SPC n r= | =C-c n r= / =Ctrl+Enter= | 执行当前 cell，停留 |
-| =SPC n x= | =C-c n x= / =Shift+Enter= | 执行后进入下一 cell，末尾自动新增 |
+| =SPC n x= | =C-c n x= | 显式执行后进入下一 cell，末尾自动新增 |
 | =SPC n j= / =SPC n k= | =C-c n j= / =C-c n k= | 下一 / 上一 cell |
 | =SPC n p= | =C-c n p= | 在正文光标处插入 Python cell；cell 内则紧接当前 cell 新增 |
 | =SPC n a= / =SPC n b= | =C-c n a= / =C-c n b= | 在当前 cell 上方 / 下方新增 Python cell |
@@ -1271,7 +1276,8 @@ cell，不把父进程变量假装成共享内存；daemon 后台子进程建议
 | =SPC n c= | =C-c n c= | 清除当前 cell 的结果 |
 | =SPC n s= | =C-c n s= | 确认后重启默认 Python 会话，清空变量 |
 
-终端可能无法区分 =Shift+Enter= / =Ctrl+Enter=，此时用 =SPC n x= / =SPC n r=。
+=Shift+Enter= / =Ctrl+Enter= 均执行并停留；终端无法区分时用 =SPC n r=。
+手动跳转仍用 =SPC n j= / =SPC n k=（编辑模式 =C-c n j= / =C-c n k=）。
 所有 Org buffer 默认视觉换行，不向文件插入真实换行。Notebook 的 cell 编辑
 使用 =python-ts-mode= 和已有 Eglot/basedpyright、补全、彩虹括号及缩进线。
 进入 cell 编辑后默认保持 Meow 普通状态，按 =i= 才进入插入状态。
@@ -1704,12 +1710,33 @@ finally:
       (define-key leader (kbd "n") cells)
       (setq-local meow-keypad-leader-dispatch leader)))
 
+  (defconst my/org-notebook--literal-text-vars
+    '(org-fontify-emphasized-text org-hide-emphasis-markers
+      org-use-sub-superscripts org-pretty-entities
+      org-pretty-entities-include-sub-superscripts org-highlight-latex-and-related)
+    "Org character-level rendering disabled only in Python notebooks.")
+
+  (defun my/org-notebook-refresh-text-style ()
+    "Rebuild Org fontification while preserving structural/table styling."
+    (save-excursion
+      (let ((modern (bound-and-true-p org-modern-mode)))
+        ;; Org Modern caches Org's font-lock keyword list, so rebuild both.
+        (when modern (org-modern-mode -1))
+        (org-set-font-lock-defaults)
+        (when font-lock-mode (font-lock-refresh-defaults))
+        (save-restriction
+          (widen)
+          (with-silent-modifications
+            (org-remove-font-lock-display-properties (point-min) (point-max))
+            (decompose-region (point-min) (point-max))))
+        (when modern (org-modern-mode 1)))))
+
   (define-minor-mode my/org-notebook-mode
     "Opt-in Org notebook with Python cells, inline results and Meow shortcuts."
     :init-value nil
     :lighter " Notebook"
     :keymap (let ((map (make-sparse-keymap)))
-              (define-key map (kbd "S-<return>") #'my/org-notebook-run-next)
+              (define-key map (kbd "S-<return>") #'my/org-notebook-run)
               (define-key map (kbd "C-<return>") #'my/org-notebook-run)
               (define-key map (kbd "RET") #'my/org-notebook-return)
               (define-key map (kbd "<return>") #'my/org-notebook-return)
@@ -1732,6 +1759,12 @@ finally:
                             org-edit-src-content-indentation org-src-lang-modes
                             org-src-window-setup
                             emulation-mode-map-alists meow-keypad-leader-dispatch))))
+          ;; Also capture missing entries when hot-loading into an existing notebook.
+          (dolist (var my/org-notebook--literal-text-vars)
+            (unless (assq var my/org-notebook--saved-locals)
+              (push (list var (local-variable-p var) (symbol-value var))
+                    my/org-notebook--saved-locals))
+            (set (make-local-variable var) nil))
           (setq my/org-notebook--session
                 (concat "org-notebook-"
                         (substring (secure-hash 'sha1
@@ -1762,7 +1795,8 @@ finally:
         (if (nth 1 saved)
             (set (make-local-variable (car saved)) (nth 2 saved))
           (kill-local-variable (car saved))))
-      (setq my/org-notebook--saved-locals nil)))
+      (setq my/org-notebook--saved-locals nil))
+    (my/org-notebook-refresh-text-style))
 
   (defvar my/org-notebook--emulation-alist
     `((my/org-notebook-mode . ,my/org-notebook-mode-map)))
@@ -1933,6 +1967,333 @@ Meow 是一个轻量的模态编辑框架，类似 Vim 但更贴合 Emacs 哲学
   (meow-global-mode 1))
 #+end_src
 
+* Emacs Rime（复用系统输入方案）
+
+使用 Elpaca 的 =rime= 前端和 Nix 编译的 librime 模块（含 Lua 插件）。
+macOS 从 =~/Library/Rime=，Linux 从 =~/.local/share/fcitx5/rime= 自动生成私有配置；
+不维护第二套方案。源 YAML 有变化时自动复制更新，其余静态词典/Lua 以链接复用。
+运行数据库、=build/=、安装标识单独保存在 =~/.local/share/emacs-rime/=，绝不链接
+系统输入法的 =*.userdb/=。一次只允许一个 Emacs 进程使用该运行目录，多个 frame 不受限。
+
+GUI 中单按左 Shift（500ms 内释放）切换中文，=C-\= 是备用键；仅在 Meow INSERT
+有效。Shift 加其他键仍是原组合键；右 Shift 保持原样。进入 INSERT 默认英文，
+退出 INSERT 关闭输入法；预编辑中 Esc 直接取消并返回 NORMAL。切英文时按共享方案的
+左 Shift 规则处理预编辑。获得焦点时用 macism / fcitx5-remote 将系统输入法切到英文，
+离开时恢复之前状态；切换失败会阻止内置输入法启用，避免叠加。此基础版针对 GUI；
+终端不承诺单 Shift 事件和系统输入法隔离。
+
+词库同步为手动操作：先在鼠须管/Fcitx5 中“同步用户资料”，再 =M-x my/rime-sync=；
+反方向则在 Emacs 同步后再让系统输入法同步。共享的是快照目录，安装 ID 保持独立。
+=M-x my/rime-redeploy= 重新读取外部配置并部署。不要编辑自动生成的私有 YAML。
+修改词典仍只改 Nix/外部输入法来源。首次部署可能需要等待，不会自动触碰外部数据库。
+=M-x my/rime-integration-mode= 可关闭集成并恢复系统输入法。
+
+Mac 的 Karabiner 全配置由 Nix 管理，原设备/KikiBridge 设置在 flakes 的
+=common/rime/karabiner-base.json=，Nix 自动追加 Emacs 规则；接管前备份原 JSON。
+以后持久修改应改 flakes，不依赖 GUI 临时改写。Linux 的 Niri
+会话使用 xremap，需 rebuild 并重新登录以取得 input/uinput 权限（可读取键盘事件）。
+这些桥接规则只匹配 Emacs。Emacs 内部规则就在下面。
+
+#+begin_src emacs-lisp
+  (use-package rime
+    :after meow
+    :demand t
+    :config
+    (require 'cl-lib)
+    (require 'json)
+
+    (defgroup my/rime nil "Rime integration." :group 'input-method)
+    (defcustom my/rime-external-directory
+      (if (eq system-type 'darwin) "~/Library/Rime"
+        (expand-file-name "fcitx5/rime" (or (getenv "XDG_DATA_HOME") "~/.local/share")))
+      "Existing external IME's configuration; never use its database directly."
+      :type 'directory)
+    (defcustom my/rime-runtime-directory
+      (expand-file-name "emacs-rime" (or (getenv "XDG_DATA_HOME") "~/.local/share"))
+      "Generated configuration copies and Emacs-only database/cache."
+      :type 'directory)
+    (defcustom my/rime-native-module
+      (expand-file-name (concat "emacs-rime-native/librime-emacs" module-file-suffix)
+                        (or (getenv "XDG_DATA_HOME") "~/.local/share"))
+      "Nix-built dynamic module; the Lisp frontend is installed by Elpaca."
+      :type 'file)
+    (defvar my/rime--external-state nil)
+    (defvar my/rime--os-owned nil)
+    (defvar my/rime--lock nil)
+    (defvar my/rime--default-snapshot :unset)
+    (defvar my/rime--initial-schema nil)
+    (defvar rime-user-data-dir)
+    (defvar rime-share-data-dir)
+    (defvar rime--module-path)
+    (defvar rime--lib-loaded)
+    (defvar meow-insert-mode)
+
+    (defun my/rime--sync-directory (external)
+      "Read the external instance's sync location without modifying installation.yaml."
+      (let ((file (expand-file-name "installation.yaml" external)))
+        (or (when (file-readable-p file)
+              (with-temp-buffer
+                (insert-file-contents file)
+                (when (re-search-forward "^sync_dir:[ \t]*\\(.+\\)$" nil t)
+                  (let* ((raw (string-trim (match-string 1)))
+                         (value (cond ((string-prefix-p "\"" raw) (json-parse-string raw))
+                                      ((and (string-prefix-p "'" raw) (string-suffix-p "'" raw))
+                                       (string-replace "''" "'" (substring raw 1 -1)))
+                                      (t (string-trim (car (split-string raw " #")))))))
+                    (unless (file-name-absolute-p value)
+                      (user-error "External Rime sync_dir must be an absolute path"))
+                    value))))
+            (expand-file-name "sync" external))))
+
+    (defun my/rime--file-hash (file)
+      (with-temp-buffer (insert-file-contents-literally file) (secure-hash 'sha256 (current-buffer))))
+
+    (defun my/rime-prepare ()
+      "Mirror external configuration only; never link userdb, build or installation IDs."
+      (let* ((external (file-name-as-directory (expand-file-name my/rime-external-directory)))
+             (runtime (file-name-as-directory (expand-file-name my/rime-runtime-directory)))
+             (manifest (expand-file-name ".emacs-managed-config" runtime))
+             old managed)
+        (unless (file-directory-p external) (user-error "No external Rime directory: %s" external))
+        (when (file-equal-p external runtime) (user-error "Rime runtime must not be the external user directory"))
+        (unless (file-readable-p my/rime-native-module)
+          (user-error "Nix Rime core missing; rebuild flakes to install %s" my/rime-native-module))
+        (make-directory runtime t)
+        (set-file-modes runtime #o700)
+        ;; A second Emacs process must not open the first process's database either.
+        (unless my/rime--lock
+          ;; share-data-dir equals the runtime, so librime will not scan-and-remove
+          ;; Emacs lock symlinks as leftover shared-data links.
+          (setq my/rime--lock (expand-file-name ".emacs-rime-owner" runtime))
+          (when (and my/rime--lock (stringp (file-locked-p my/rime--lock)))
+            (setq my/rime--lock nil)
+            (user-error "Another Emacs owns this Rime runtime; use its server/frames"))
+          (when my/rime--lock (lock-file my/rime--lock)))
+        (when (file-readable-p manifest)
+          (with-temp-buffer (insert-file-contents manifest) (setq old (split-string (buffer-string) "\n" t))))
+        (dolist (source (directory-files external t "\\`[^.]"))
+          (let* ((name (file-name-nondirectory source)) (target (expand-file-name name runtime)))
+            (when (and (not (member name '("build" "sync" "trash" "installation.yaml" "user.yaml")))
+                       (not (string-match-p "\\.userdb\\(?:\\.\\|\\'\\)" name))
+                       (or (file-directory-p source) (string-match-p "\\.\\(?:yaml\\|txt\\|lua\\)\\'" name)))
+              (when (and (or (file-exists-p target) (file-symlink-p target)) (not (member name old)))
+                (user-error "Refusing to replace unmanaged Rime runtime file: %s" target))
+              (if (and (not (file-directory-p source)) (string-suffix-p ".yaml" name))
+                  ;; Copy changed YAML so its timestamp is current.  Nix store YAML
+                  ;; has epoch mtimes, which otherwise prevent Rime redeployment.
+                  (unless (and (file-regular-p target) (not (file-symlink-p target))
+                               (equal (my/rime--file-hash source) (my/rime--file-hash target)))
+                    (when (file-symlink-p target) (delete-file target))
+                    (copy-file source target t)
+                    (set-file-modes target #o600))
+                (when (file-symlink-p target) (delete-file target))
+                (make-symbolic-link source target))
+              (push name managed))))
+        ;; Stale generated YAML is safe to retain until explicit user inspection;
+        ;; never delete data as part of a configuration refresh.
+        (let ((sync (expand-file-name "sync" runtime)) (shared (my/rime--sync-directory external)))
+          (make-directory shared t)
+          (when (and (file-exists-p sync) (not (file-symlink-p sync)))
+            (user-error "Runtime sync must link to external snapshot directory: %s" sync))
+          (when (equal (directory-file-name shared) (directory-file-name sync))
+            (user-error "Rime sync directory cannot point to itself"))
+          (when (file-symlink-p sync) (delete-file sync))
+          (make-symbolic-link shared sync)
+          ;; Set an absolute sync path before the first librime initialization.
+          ;; A freshly created librime installation can otherwise retain the
+          ;; relative default "sync" until a subsequent deployment.
+          (let* ((installation (expand-file-name "installation.yaml" runtime))
+                 (before (when (file-readable-p installation)
+                           (with-temp-buffer (insert-file-contents installation) (buffer-string))))
+                 (coding-system-for-write 'utf-8-unix))
+            (with-temp-buffer
+              (if before (insert before)
+                (insert "installation_id: emacs-"
+                        (substring (secure-hash 'sha256
+                                                (format "%s:%s:%s:%s" (system-name) (user-uid) (current-time) (random))) 0 20)
+                        "\n"))
+              (goto-char (point-min))
+              (if (re-search-forward "^sync_dir:.*$" nil t)
+                  (replace-match (concat "sync_dir: " (decode-coding-string (json-serialize (file-truename shared)) 'utf-8)) t t)
+                (goto-char (point-max))
+                (unless (bolp) (insert "\n"))
+                (insert "sync_dir: " (decode-coding-string (json-serialize (file-truename shared)) 'utf-8) "\n"))
+              (unless (equal before (buffer-string))
+                (write-region (point-min) (point-max) installation nil 'silent)
+                (set-file-modes installation #o600)))))
+        ;; Seed only compiled static tables by COPYING, never writable links back
+        ;; to the external build cache.  This avoids recompiling large dictionaries.
+        (let ((source-build (expand-file-name "build" external))
+              (target-build (expand-file-name "build" runtime)))
+          (when (file-directory-p source-build)
+            (make-directory target-build t)
+            (dolist (source (directory-files source-build t "\\.\\(?:table\\|reverse\\)\\.bin\\'"))
+              (let ((target (expand-file-name (file-name-nondirectory source) target-build)))
+                (unless (file-exists-p target)
+                  (copy-file source target)
+                  (set-file-modes target #o600))))))
+        (with-temp-file manifest (insert (mapconcat #'identity (delete-dups (append managed old)) "\n") "\n"))
+        (when (and (not (file-exists-p (expand-file-name "user.yaml" runtime)))
+                   (file-readable-p (expand-file-name "user.yaml" external)))
+          (with-temp-buffer
+            (insert-file-contents (expand-file-name "user.yaml" external))
+            (when (re-search-forward "^[ \t]+previously_selected_schema:[ \t]*\\([a-zA-Z0-9_-]+\\)" nil t)
+              (setq my/rime--initial-schema (match-string 1)))))
+        ;; Never make the live external user directory librime's shared directory:
+        ;; its resource resolver can otherwise open the external *.userdb there.
+        ;; Both search roots point to the safe generated profile instead.
+        (setq rime-user-data-dir runtime rime-share-data-dir runtime rime--module-path my/rime-native-module)))
+
+    (defun my/rime-core-rebuild-required (&rest _)
+      (user-error "Rime native core is managed by Nix; rebuild/update flakes rather than compiling inside Emacs"))
+
+    (defun my/rime-before-activate (&rest _)
+      "Protect activation paths other than the Shift/C-backslash binding too."
+      (unless (bound-and-true-p meow-insert-mode)
+        (user-error "Emacs Rime is available only in Meow INSERT"))
+      (when (and (display-graphic-p) (not my/rime--os-owned))
+        (my/rime-focus-update)
+        (unless my/rime--os-owned (user-error "External IME could not be switched to English")))
+      (unless rime--lib-loaded (my/rime-prepare)))
+
+    (defun my/rime-after-activate (&rest _)
+      "On first use, select the external IME's last schema without sharing user.yaml."
+      (when my/rime--initial-schema
+        (when (assoc my/rime--initial-schema (rime-lib-get-schema-list))
+          (rime-lib-select-schema my/rime--initial-schema))
+        (setq my/rime--initial-schema nil)))
+
+    (defun my/rime--ascii-only ()
+      (not (bound-and-true-p meow-insert-mode)))
+
+    (defun my/rime-toggle ()
+      "Toggle Chinese in INSERT only.  F13/Shift is harmless in NORMAL."
+      (interactive)
+      (if (not (bound-and-true-p meow-insert-mode))
+          (when current-input-method (deactivate-input-method))
+        (if current-input-method
+            (progn
+              ;; Respect the shared schema's Shift_L policy for unfinished input.
+              (when (and (equal current-input-method "rime") (bound-and-true-p rime-active-mode))
+                (rime-inline-ascii)
+                (when-let* ((commit (rime-lib-get-commit))) (insert commit)))
+              (deactivate-input-method))
+          (when (and (display-graphic-p) (not my/rime--os-owned))
+            (my/rime-focus-update)
+            (unless my/rime--os-owned
+              (user-error "Cannot ensure external IME is English; check macism/fcitx5-remote")))
+          (require 'rime)
+          (activate-input-method "rime")
+          (rime-lib-set-option "ascii_mode" nil))))
+
+    (defun my/rime-leave-insert ()
+      "Never leave an Emacs input method active after INSERT."
+      (when current-input-method (deactivate-input-method)))
+
+    (defun my/rime-normal-guard ()
+      (when (and current-input-method (not (bound-and-true-p meow-insert-mode)))
+        (deactivate-input-method)))
+
+    (defun my/rime-escape ()
+      "Cancel unfinished composition and return directly to Meow NORMAL."
+      (interactive)
+      (deactivate-input-method)
+      (when (bound-and-true-p meow-insert-mode) (meow-insert-exit)))
+
+    (defun my/rime-sync ()
+      "Merge shared Rime snapshots, not running external databases."
+      (interactive)
+      (unless (bound-and-true-p rime--lib-loaded) (user-error "Activate Rime once in INSERT before syncing"))
+      (rime-sync)
+      (message "Emacs vocabulary synced. Run external IME's user-data sync to import it there."))
+
+    (defun my/rime-redeploy ()
+      "Refresh generated configuration from the external IME, then redeploy."
+      (interactive)
+      (unless (bound-and-true-p rime--lib-loaded) (user-error "Activate Rime once before redeploying"))
+      (my/rime-prepare)
+      (rime-deploy))
+
+    (defun my/rime--os-command (&rest arguments)
+      (let ((program (if (eq system-type 'darwin) "macism" "fcitx5-remote")))
+        (unless (executable-find program) (error "%s not installed" program))
+        (with-temp-buffer
+          (unless (zerop (apply #'call-process program nil t nil arguments)) (error "%s failed" program))
+          (string-trim (buffer-string)))))
+
+    (defun my/rime-release-os ()
+      (when my/rime--os-owned
+        (let ((state my/rime--external-state))
+          (setq my/rime--os-owned nil my/rime--external-state nil)
+          (condition-case err
+              (when (stringp state)
+                (if (eq system-type 'darwin) (my/rime--os-command state)
+                  (when (equal state "2") (my/rime--os-command "-o"))))
+            (error (message "Restore external IME: %s" (error-message-string err)))))))
+
+    (defun my/rime-focus-update ()
+      "Keep the OS IME English while a GUI Emacs frame owns focus."
+      (condition-case err
+          (if (seq-some (lambda (frame) (and (display-graphic-p frame)
+                                           (eq (frame-focus-state frame) t))) (frame-list))
+              (unless my/rime--os-owned
+                (let ((state (my/rime--os-command)))
+                  (if (eq system-type 'darwin) (my/rime--os-command "com.apple.keylayout.ABC")
+                    (unless (member state '("1" "2")) (error "Fcitx5 is not running"))
+                    (my/rime--os-command "-c"))
+                  (setq my/rime--external-state state my/rime--os-owned t)))
+            (my/rime-release-os))
+        (error (message "Emacs Rime focus integration: %s" (error-message-string err)))))
+
+    ;; Rime clears preedit before commands not beginning with "rime-".  These
+    ;; aliases preserve preedit until the dedicated toggle/escape handles it.
+    (defalias 'rime-meow-toggle #'my/rime-toggle)
+    (defalias 'rime-meow-escape #'my/rime-escape)
+
+    (defun my/rime-shutdown ()
+      (my/rime-release-os)
+      (when my/rime--lock (unlock-file my/rime--lock) (setq my/rime--lock nil)))
+
+    (define-minor-mode my/rime-integration-mode
+      "GUI Rime input in Meow INSERT only, sharing external configuration."
+      :global t :lighter nil
+      :keymap (let ((map (make-sparse-keymap)))
+                (define-key map (kbd "<f13>") #'rime-meow-toggle)
+                (define-key map (kbd "C-\\") #'rime-meow-toggle) map)
+      (if my/rime-integration-mode
+          (progn
+            (when (eq my/rime--default-snapshot :unset)
+              (setq my/rime--default-snapshot default-input-method))
+            (setq default-input-method "rime")
+            (add-hook 'meow-insert-exit-hook #'my/rime-leave-insert)
+            (add-hook 'meow-insert-enter-hook #'my/rime-leave-insert)
+            (add-hook 'post-command-hook #'my/rime-normal-guard)
+            (add-hook 'kill-emacs-hook #'my/rime-shutdown)
+            (add-function :after after-focus-change-function #'my/rime-focus-update)
+            (my/rime-focus-update))
+        (remove-hook 'meow-insert-exit-hook #'my/rime-leave-insert)
+        (remove-hook 'meow-insert-enter-hook #'my/rime-leave-insert)
+        (remove-hook 'post-command-hook #'my/rime-normal-guard)
+        (remove-function after-focus-change-function #'my/rime-focus-update)
+        (dolist (buffer (buffer-list))
+          (with-current-buffer buffer
+            (when (equal current-input-method "rime") (deactivate-input-method))))
+        (unless (eq my/rime--default-snapshot :unset)
+          (setq default-input-method my/rime--default-snapshot
+                my/rime--default-snapshot :unset))
+        (my/rime-release-os)))
+    (setq rime-show-candidate 'posframe
+          rime-posframe-style 'vertical)
+    (add-to-list 'rime-disable-predicates #'my/rime--ascii-only)
+    (advice-add 'rime-compile-module :override #'my/rime-core-rebuild-required)
+    (advice-add 'rime-activate :before #'my/rime-before-activate)
+    (advice-add 'rime-activate :after #'my/rime-after-activate)
+    (define-key rime-active-mode-map (kbd "<f13>") #'rime-meow-toggle)
+    (define-key rime-active-mode-map (kbd "C-\\") #'rime-meow-toggle)
+    (define-key rime-active-mode-map (kbd "<escape>") #'rime-meow-escape)
+    (my/rime-integration-mode 1))
+#+end_src
+
 * 编程语言支持
 
 Lua 用内置 =lua-ts-mode=（=treesit-enabled-modes=），不再装 =lua-mode=。
@@ -1960,7 +2321,7 @@ buffer 的 Combobulate 结构树（不截断为光标附近的几层）；=q= �
 
 =SPC s p=（编辑模式 =C-c s p=）在 JSON 中显示方括号节点、嵌套容器和箭头，
 顶部居中显示可点击的原 HTML 标签，窗口大小变化时自动重排。点击节点返回 JSON 对应位置；=g= 重排，
-=v= 查看可选代码，=s= 导出 SVG。渲染器在 =lisp/my-json-diagram.el=，纯内置 SVG，
+=v= 查看可选代码，=s= 导出 SVG。渲染器就在本配置里，纯内置 SVG，
 不需要 Graphviz 或浏览器渲染。=y= / =p= 与 =c= / =l= 仍可复制表达式、print、
 网页解析及本地验证代码。HTML/Python 保留原父级链；JSON 加 =C-u= 前缀可查看
 原语法链。=q= 返回原 buffer 原光标位置。
@@ -2559,8 +2920,303 @@ Always prompt if multiple scripts exist, regardless of point.  q returns
     "Keep all provenance and examples valid Python comments."
     (mapconcat (lambda (line) (concat "# " line)) (split-string text "\n") "\n"))
 
-  ;; The native SVG renderer is kept separate from the data/path logic.
-  (require 'my-json-diagram (expand-file-name "lisp/my-json-diagram.el" user-emacs-directory))
+  ;; Renderer for the JSON reference information maintained by init.org.
+  ;; Native SVG only; no Graphviz, browser or external rendering service.
+
+  (require 'cl-lib)
+  (require 'button)
+  (defvar my/json-reference-info)
+  (defvar my/json-reference-mode-map)
+  (defvar my/json-reference-emulation-alist)
+  (defvar my/combobulate-structure-origin-file)
+  (declare-function my/json-python-literal "init")
+  (declare-function my/html-json-scripts "init")
+  (declare-function my/combobulate-structure-quit "init")
+
+  (defun my/json-diagram-short (text width)
+    (truncate-string-to-width (replace-regexp-in-string "[\n\r\t]" " " text) (max 8 width) nil nil "…"))
+
+  (defun my/json-diagram-position (node)
+    (let ((parent (treesit-node-parent node)))
+      (copy-marker (treesit-node-start
+                    (if (equal (treesit-node-type parent) "pair")
+                        (treesit-node-child-by-field-name parent "key") node)))))
+
+  (defun my/json-diagram-items (info)
+    "Capture only the path and at most four real nearby children per container."
+    (let ((nodes (plist-get info :nodes)) (parts (cons nil (plist-get info :parts))) items)
+      (cl-loop for rest on nodes for part in parts for depth from 0 do
+               (let* ((node (car rest)) (next (cadr rest))
+                      (type (treesit-node-type node))
+                      (count (treesit-node-child-count node t))
+                      (label (if (zerop depth) "data"
+                               (format "[%s]" (if (integerp part) part (my/json-python-literal part)))))
+                      (entry (list :label label :key part :type type :count count
+                                   :position (my/json-diagram-position node)))
+                      indices
+                      children)
+                 (when (member type '("object" "array"))
+                   (setq indices
+                         (if (equal type "array")
+                             (let ((index (if next (treesit-node-index next t) 0)))
+                               (number-sequence (max 0 (1- index)) (min (1- count) (1+ index))))
+                           (number-sequence 0 (min 2 (1- count)))))
+                   (dolist (index indices)
+                     (let* ((child (treesit-node-child node index t))
+                            (pair (equal (treesit-node-type child) "pair"))
+                            (value (if pair (treesit-node-child-by-field-name child "value") child))
+                            (key (if pair (json-parse-string (treesit-node-text (treesit-node-child-by-field-name child "key") t)) index)))
+                       (push (list :label (concat (format "[%s]" (if (integerp key) key (my/json-python-literal key)))
+                                                 (unless (member (treesit-node-type value) '("object" "array"))
+                                                   (concat " = " (buffer-substring-no-properties (treesit-node-start value)
+                                                                 (min (treesit-node-end value) (+ 80 (treesit-node-start value)))))))
+                                   :position (my/json-diagram-position value)
+                                   :selected (and next (treesit-node-eq next value))) children)))
+                   (when (and next (not (cl-some (lambda (c) (plist-get c :selected)) children)))
+                     (push (list :label (format "[%s]" (let ((key (nth depth (plist-get info :parts))))
+                                                      (if (integerp key) key (my/json-python-literal key))))
+                                 :position (my/json-diagram-position next) :selected t) children))
+                   (setq entry (plist-put entry :children (nreverse children))))
+                 (when (and (not (member type '("object" "array"))) (< (- (treesit-node-end node) (treesit-node-start node)) 300))
+                   (setq entry (plist-put entry :value (treesit-node-text node t))))
+                 (push entry items)))
+      (nreverse items)))
+
+  (defun my/json-diagram-jump (id)
+    "Return to a real JSON key/value, or to the source HTML script tag."
+    (let* ((target (cdr (assq id my/json-diagram-targets)))
+           (source (plist-get target :buffer))
+           (position (plist-get target :position))
+           (origin (plist-get target :origin)))
+      (if origin
+          (progn
+            (unless (buffer-live-p source)
+              (let ((file (plist-get origin :file)))
+                (unless (and file (file-exists-p file)) (user-error "Source HTML is no longer available"))
+                (setq source (find-file-noselect file))))
+            (setq position
+                  (with-current-buffer source
+                    (let ((entry (cl-find-if
+                                  (lambda (e) (and (equal (plist-get e :id) (plist-get origin :id))
+                                                   (equal (plist-get e :type) (plist-get origin :type))
+                                                   (= (plist-get e :selector-index) (plist-get origin :selector-index))))
+                                  (my/html-json-scripts))))
+                      (or (plist-get entry :tag-start) (plist-get origin :tag-start)
+                          (save-excursion (goto-char (point-min)) (forward-line (1- (plist-get origin :line))) (point)))))))
+        (unless (and (buffer-live-p source) (marker-buffer position))
+          (user-error "Source JSON closed; reopen it with SPC j j"))
+        (unless (= (buffer-chars-modified-tick source) (plist-get target :tick))
+          (user-error "Source JSON changed; reopen this diagram")))
+      (my/combobulate-structure-quit)
+      (switch-to-buffer source)
+      (goto-char position)
+      (recenter)))
+
+  (defvar-local my/json-diagram-targets nil)
+  (defvar-local my/json-diagram-items nil)
+  (defvar-local my/json-diagram-source nil)
+  (defvar-local my/json-diagram-origin nil)
+  (defvar-local my/json-diagram-source-tick nil)
+  (defvar-local my/json-diagram-drawing nil)
+  (defvar-local my/json-diagram-code-p nil)
+  (defvar my/json-diagram-resize-timer nil)
+
+  (defun my/json-diagram-width ()
+    "Fit this buffer's visible windows, not the currently selected window.
+  When the same diagram is displayed twice, fit the narrower window."
+    (let* ((windows (get-buffer-window-list (current-buffer) nil 'visible))
+           (widths (mapcar (lambda (window) (window-body-width window t)) windows)))
+      (max 160 (- (if widths (apply #'min widths) (window-body-width nil t)) 14))))
+
+  (defun my/json-diagram-refresh-visible ()
+    "Reflow visible diagrams only when their available width changed."
+    (setq my/json-diagram-resize-timer nil)
+    (let (buffers)
+      (walk-windows (lambda (window) (cl-pushnew (window-buffer window) buffers)) 'no-minibuf 'visible)
+      (dolist (buffer buffers)
+        (with-current-buffer buffer
+          (when (and my/json-diagram-drawing (not my/json-diagram-code-p)
+                     (buffer-live-p my/json-diagram-source)
+                     (or (null my/json-diagram-source-tick)
+                         (= my/json-diagram-source-tick (buffer-chars-modified-tick my/json-diagram-source)))
+                     (/= (my/json-diagram-width) (plist-get my/json-diagram-drawing :width)))
+            (let ((window (get-buffer-window buffer 'visible)))
+              (when (window-live-p window)
+                (with-selected-window window
+                  (condition-case err
+                      (my/json-diagram-redraw)
+                    (error (message "JSON diagram resize: %s" (error-message-string err))))))))))))
+
+  (defun my/json-diagram-schedule-resize (&rest _)
+    "Debounce resize/split/buffer-display events outside redisplay."
+    (when (timerp my/json-diagram-resize-timer)
+      (cancel-timer my/json-diagram-resize-timer))
+    (setq my/json-diagram-resize-timer
+          (run-with-idle-timer 0.12 nil #'my/json-diagram-refresh-visible)))
+
+  (add-hook 'window-size-change-functions #'my/json-diagram-schedule-resize)
+  (add-hook 'window-buffer-change-functions #'my/json-diagram-schedule-resize)
+
+  (defun my/json-diagram-svg (items origin source width)
+    "Draw nested container boxes and a snake-shaped path with real hit targets."
+    (require 'svg)
+    (let* ((columns (max 1 (min 3 (/ (- width 20) 300))))
+           (margin 20) (gap 42) (card-width (/ (- width (* 2 margin) (* gap (1- columns))) columns))
+           (card-height 218) (row-step 274) (top 132)
+           (rows (ceiling (length items) columns))
+           (height (+ top (* rows row-step)))
+           (svg (svg-create width height))
+           (dark (eq (frame-parameter nil 'background-mode) 'dark))
+           (bg (if dark "#1e1e2e" "#eff1f5"))
+           (fg (if dark "#cdd6f4" "#4c4f69"))
+           (fill (if dark "#313244" "#e6e9ef"))
+           (accent (if dark "#89b4fa" "#1e66f5"))
+           (muted (if dark "#a6adc8" "#6c6f85"))
+           (chars (max 8 (/ (- card-width 36) 10)))
+           (tick (buffer-chars-modified-tick source))
+           positions maps targets)
+      (cl-labels
+          ((text (s x y &rest attrs)
+             (let ((props (list :x x :y y :font-family "monospace" :font-size 15 :fill fg)))
+               (while attrs (setq props (plist-put props (pop attrs) (pop attrs))))
+               (apply #'svg-text svg s props)))
+           (hit (id x y w h target tip)
+             (push (list (cons 'rect (cons (cons x y) (cons (+ x w) (+ y h)))) id
+                         (list 'help-echo tip 'pointer 'hand)) maps)
+             (push (cons id target) targets))
+           (arrow (x1 y1 x2 y2)
+             (svg-line svg x1 y1 x2 y2 :stroke accent :stroke-width 2)
+             (let ((dx (- x2 x1)) (dy (- y2 y1)))
+               (svg-polygon svg
+                            (cond ((> dy 0) (list (cons x2 y2) (cons (- x2 6) (- y2 10)) (cons (+ x2 6) (- y2 10))))
+                                  ((> dx 0) (list (cons x2 y2) (cons (- x2 10) (- y2 6)) (cons (- x2 10) (+ y2 6))))
+                                  (t (list (cons x2 y2) (cons (+ x2 10) (- y2 6)) (cons (+ x2 10) (+ y2 6)))))
+                            :fill accent))))
+        (svg-rectangle svg 0 0 width height :fill bg)
+        (text (my/json-diagram-short (if origin (or (plist-get origin :file) (plist-get origin :buffer-name)) "JSON") (/ (- width 40) 9))
+              (/ width 2) 28 :text-anchor "middle" :font-size 14)
+        (text (my/json-diagram-short (if origin (plist-get origin :tag) "JSON 根对象") (/ (- width 40) 10))
+              (/ width 2) 58 :text-anchor "middle" :font-weight "bold" :fill accent :font-size 17)
+        (text (my/json-diagram-short "点击标签回 HTML · 点击方框回 JSON · 高亮小框是下一层 · q 返回 · g 重排" (/ (- width 32) 8))
+              (/ width 2) 88 :text-anchor "middle" :font-size 12 :fill muted)
+        (when origin
+          (hit 'json-html 12 6 (- width 24) 66 (list :buffer (buffer-local-value 'my/html-json-source-buffer source) :origin origin)
+               (concat "跳到源 HTML 标签\n" (plist-get origin :tag))))
+        (cl-loop for item in items for i from 0 do
+                 (let* ((row (/ i columns)) (slot (% i columns))
+                        (col (if (zerop (% row 2)) slot (- columns slot 1)))
+                        (x (+ margin (* col (+ card-width gap))))
+                        (y (+ top (* row row-step)))
+                        (id (intern (format "json-node-%d" i)))
+                        (type (plist-get item :type))
+                        (container (member type '("object" "array")))
+                        (label (plist-get item :label)))
+                   (push (list x y) positions)
+                   (svg-rectangle svg x y card-width card-height :rx 10 :fill fill :stroke accent :stroke-width 1.5)
+                   (text (format "%d  %s%s" i (pcase type ("object" "字典 {}") ("array" "列表 []") (_ type))
+                                 (if container (format " · %d 项" (plist-get item :count)) ""))
+                         (+ x 14) (+ y 23) :font-size 12 :fill muted)
+                   (text (my/json-diagram-short label chars) (+ x 14) (+ y 51) :font-weight "bold" :fill accent)
+                   (hit id x y card-width 66 (list :buffer source :tick tick :position (plist-get item :position) :label label)
+                        (concat label "\n点击跳到 JSON 对应位置"))
+                   (if container
+                       (cl-loop for child in (plist-get item :children) for j from 0 below 4 do
+                                (let ((cy (+ y 72 (* j 31))) (selected (plist-get child :selected))
+                                      (cid (intern (format "json-child-%d-%d" i j))))
+                                  (svg-rectangle svg (+ x 12) cy (- card-width 24) 27 :rx 4
+                                                 :fill bg :stroke (if selected accent muted) :stroke-width (if selected 2 0.5))
+                                  (text (concat (if selected "→ " "  ") (my/json-diagram-short (plist-get child :label) (- chars 2)))
+                                        (+ x 20) (+ cy 19) :font-size 13 :fill (if selected accent muted))
+                                  (hit cid (+ x 12) cy (- card-width 24) 27
+                                       (list :buffer source :tick tick :position (plist-get child :position))
+                                       (plist-get child :label))))
+                     (text (my/json-diagram-short (or (plist-get item :value) "") (/ (- card-width 32) 12))
+                           (+ x 14) (+ y 112) :font-size 20 :fill accent))))
+        (setq positions (nreverse positions))
+        (cl-loop for prev in positions for next in (cdr positions) for i from 0 do
+                 (let ((x1 (car prev)) (y1 (cadr prev)) (x2 (car next)) (y2 (cadr next)))
+                   (if (= y1 y2)
+                       (if (< x1 x2)
+                           (arrow (+ x1 card-width) (+ y1 108) x2 (+ y2 108))
+                         (arrow x1 (+ y1 108) (+ x2 card-width) (+ y2 108)))
+                     (arrow (+ x1 (/ card-width 2)) (+ y1 card-height) (+ x2 (/ card-width 2)) y2))))
+        (list :svg svg :width width :height height :map (nreverse maps) :targets (nreverse targets)))))
+
+  (defun my/json-diagram-redraw ()
+    (interactive)
+    (unless (buffer-live-p my/json-diagram-source)
+      (user-error "Source JSON closed; reopen it with SPC j j"))
+    (when (and my/json-diagram-source-tick
+               (/= my/json-diagram-source-tick (buffer-chars-modified-tick my/json-diagram-source)))
+      (user-error "Source JSON changed; reopen this diagram"))
+    (let* ((drawing (my/json-diagram-svg my/json-diagram-items my/json-diagram-origin my/json-diagram-source
+                                        (my/json-diagram-width)))
+           (inhibit-read-only t)
+           (map (copy-keymap my/json-reference-mode-map)))
+      (setq my/json-diagram-targets (plist-get drawing :targets)
+            my/json-diagram-drawing drawing
+            my/json-diagram-code-p nil)
+      (erase-buffer)
+      (dolist (target my/json-diagram-targets)
+        (let ((id (car target)))
+          (define-key map (vector id 'mouse-1) (lambda (_event) (interactive "e") (my/json-diagram-jump id)))))
+      (define-key map (kbd "g") #'my/json-diagram-redraw)
+      (define-key map (kbd "v") #'my/json-diagram-show-code)
+      (define-key map (kbd "s") #'my/json-diagram-export)
+      (define-key map (kbd "RET") #'push-button)
+      (define-key map (kbd "<return>") #'push-button)
+      (define-key map (kbd "TAB") #'forward-button)
+      (define-key map (kbd "<tab>") #'forward-button)
+      (define-key map (kbd "<backtab>") #'backward-button)
+      (define-key map (kbd "S-<tab>") #'backward-button)
+      (setq-local my/json-reference-emulation-alist `((my/json-reference-mode . ,map)))
+      (if (and (display-graphic-p) (image-type-available-p 'svg))
+          (let ((image (svg-image (plist-get drawing :svg) :scale 1.0 :map (plist-get drawing :map))))
+            (insert-sliced-image image " " nil (max 1 (ceiling (plist-get drawing :height) 200)) 1))
+        (insert "JSON 层级关系（当前终端使用文字版）\n")
+        (when my/json-diagram-origin
+          (insert (format "来源：%s\n原始标签：%s\n" (or (plist-get my/json-diagram-origin :file) "HTML")
+                          (plist-get my/json-diagram-origin :tag))))
+        (insert "\n")
+        (dolist (item my/json-diagram-items)
+          (insert (format "┌─ %s ─ %s\n└──────────\n       ↓\n" (plist-get item :label) (plist-get item :type)))))
+      (insert "\n节点跳转（Tab 选择，Enter 跳转）\n")
+      (dolist (target my/json-diagram-targets)
+        (when (or (eq (car target) 'json-html) (string-prefix-p "json-node-" (symbol-name (car target))))
+          (let ((id (car target)))
+            (insert-text-button (if (eq id 'json-html) "源 HTML 标签" (my/json-diagram-short (plist-get (cdr target) :label) 28))
+                                'follow-link t 'action (lambda (_) (my/json-diagram-jump id)))
+            (insert "  "))))
+      (cl-loop for item in my/json-diagram-items for i from 0
+               when (and (stringp (plist-get item :key)) (> (string-width (plist-get item :key)) 38)) do
+               (insert (format "\n\n节点 %d 的完整字符串键（单个键，不是额外字典层级）：\n%s\n" i (plist-get item :key))))
+      (insert "\n窗口变化自动重排 · v：可选代码页 · g：恢复图示 · s：导出 SVG · q：返回\n")
+      (goto-char (point-min))
+      (dolist (window (get-buffer-window-list (current-buffer) nil 'visible))
+        (set-window-hscroll window 0)
+        (set-window-vscroll window 0 t)
+        (set-window-start window (point-min)))
+      (set-buffer-modified-p nil)))
+
+  (defun my/json-diagram-show-code ()
+    (interactive)
+    (setq my/json-diagram-code-p t)
+    (let ((inhibit-read-only t))
+      (erase-buffer)
+      (insert (plist-get my/json-reference-info :code-text))
+      (goto-char (point-min))
+      (set-buffer-modified-p nil)))
+
+  (defun my/json-diagram-export ()
+    "Export the current diagram, rather than its image placeholder text."
+    (interactive)
+    (unless my/combobulate-structure-origin-file (user-error "No original file for this diagram"))
+    (let ((file (concat (file-name-sans-extension my/combobulate-structure-origin-file) ".path.svg"))
+          (coding-system-for-write 'utf-8-unix))
+      (unless (or (not (file-exists-p file)) (yes-or-no-p (format "Overwrite %s? " file)))
+        (user-error "Diagram export cancelled"))
+      (with-temp-file file (svg-print (plist-get my/json-diagram-drawing :svg)))
+      (message "JSON diagram exported: %s" file)))
 
   (defun my/json-show-python-reference ()
     "Show nested JSON boxes/arrows and clickable source provenance."
