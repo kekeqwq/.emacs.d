@@ -182,7 +182,8 @@ Notebook 每个文件默认一个 Python 会话，cell 间共享变量。输出�
 
 | 普通模式 | 插入模式 | 功能 |
 |----------+----------+------|
-| =SPC e p= | =C-c e p= | 导出当前可见全文为可选中、可搜索文字的 PDF |
+| =SPC e p= | =C-c e p= | 按当前展开/折叠状态导出 PDF（.view.pdf） |
+| =SPC e a= | =C-c e a= | 全部展开后导出完整 PDF（.full.pdf），不改变原折叠状态 |
 
 也可 =M-x my/org-export-visible-pdf=。默认保存为原 Org 文件旁的
 =文件名.view.pdf=，已有文件会确认覆盖；加 =C-u= 前缀可选路径。
@@ -1045,11 +1046,15 @@ Org 正文与普通代码 buffer 一样按字符贴边折行，并显示左右�
 
 * Org 可见视图导出 PDF
 
-按顶部说明书的 =SPC e p= / =C-c e p= 导出当前显示效果。使用内置
+=SPC e p= / =C-c e p= 按当前折叠状态导出 =.view.pdf=；
+=SPC e a= / =C-c e a= 全部展开后导出 =.full.pdf=，结束后恢复原折叠状态。
+两个命令均使用内置
 =htmlfontify= 读取实时 face，再由本机 Chrome/Chromium 打印为 PDF，
 不经过 LaTeX，不运行 Babel，不加载用户的浏览器 profile。源文件、光标、
 折叠状态与未保存的编辑均保留；失败时不覆盖已有 PDF。支持已显示的
 PNG / JPEG / SVG / GIF / WebP 图片，浏览器与字体使用本机现有安装。
+PDF 使用白纸背景（不带编辑器的灰色底色），保留文字配色与字号比例；
+中文明确使用霞鹜文楷等宽，英文沿用当前 face 的字体。
 
 #+begin_src emacs-lisp
 (defcustom my/org-visible-pdf-browser-program nil
@@ -1120,6 +1125,25 @@ PNG / JPEG / SVG / GIF / WebP 图片，浏览器与字体使用本机现有安�
                                :underline :overline :strike-through :box)
              append (list attribute (face-attribute temporary attribute nil 'default)))))
 
+(defun my/org-visible-pdf-print-css (style)
+  "Keep face fonts but give CJK the same explicit mapping as the Org fontset."
+  (let* ((cjk (if (boundp 'my/org-cjk-font-family)
+                  my/org-cjk-font-family "LXGW WenKai Mono"))
+         ;; htmlfontify calls Emacs font sizes points; on this display they
+         ;; are pixels. CSS pt enlarges every line by 4/3 and changes wrapping.
+         (css (replace-regexp-in-string
+               "font-size:[ ]*\\([0-9.]+\\)pt"
+               "font-size: \\1px" style)))
+    (setq css (replace-regexp-in-string
+               "font-family:[ ]*\\([^;]+\\);"
+               (lambda (match)
+                 (concat "font-family: \"Org PDF CJK\", "
+                         (substring match (length "font-family:"))))
+               css t t))
+    (concat
+     (format "<style>@font-face { font-family: 'Org PDF CJK'; src: local(%S); unicode-range: U+2E80-303F, U+3040-30FF, U+3100-312F, U+31A0-31BF, U+31F0-31FF, U+3400-4DBF, U+4E00-9FFF, U+F900-FAFF, U+FE30-FE4F, U+FF00-FFEF, U+20000-323AF; }</style>" cjk)
+     css)))
+
 (defun my/org-visible-pdf-html ()
   "Return HTML for the entire visible Org buffer, preserving current folds."
   (require 'htmlfontify)
@@ -1134,10 +1158,12 @@ PNG / JPEG / SVG / GIF / WebP 图片，浏览器与字体使用本机现有安�
           (lambda (_file style)
             (format "<!doctype html><html><head><meta charset=\"utf-8\"><title>%s</title>%s<style>
 @page { size: A4; margin: 12mm; }
-html, body { background: %s; color: %s; margin: 0; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+html, body { background: white !important; color: %s; margin: 0; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+body pre, body pre span, body pre a { background: transparent !important; }
 pre { white-space: pre-wrap; overflow-wrap: anywhere; tab-size: %d; margin: 0; }
 img { max-width: 100%%; height: auto; break-inside: avoid; }
-</style></head><body>" (my/org-visible-pdf-escape title) style background foreground tabs)))
+</style></head><body>" (my/org-visible-pdf-escape title)
+                    (my/org-visible-pdf-print-css style) foreground tabs)))
          (hfy-page-footer (lambda (&rest _) "</body></html>"))
          images html)
     (unwind-protect
@@ -1147,7 +1173,12 @@ img { max-width: 100%%; height: auto; break-inside: avoid; }
             (font-lock-ensure)
             (let ((position (point-min)) (end (point-max)) previous-display)
               (while (< position end)
-                (let* ((next (next-char-property-change position end))
+                (let* ((folded (org-fold-folded-p position))
+                       ;; Faces and Org Modern split hidden subtrees into many
+                       ;; runs. Skip the whole fold, not one face run at a time.
+                       (next (if folded
+                                 (org-fold-core-next-visibility-change position end t)
+                               (next-char-property-change position end)))
                        (display (get-char-property position 'display))
                        (hidden (invisible-p position))
                        (raw-face (hfy-face-at position))
@@ -1155,10 +1186,22 @@ img { max-width: 100%%; height: auto; break-inside: avoid; }
                                  (puthash raw-face (my/org-visible-pdf-face raw-face) faces)))
                        (text
                         (cond
-                         ((or (org-fold-folded-p position)
+                         ((or folded
                               (and hidden (not (eq (car-safe display) 'image))))
-                          ;; A folded subtree may hide its leading newline.
-                          (when (string-match-p "\n" (buffer-substring-no-properties position next)) "\n"))
+                          ;; Hidden text contributes NO height. Preserve just
+                          ;; the heading's line ending if its newline is folded.
+                          (concat
+                           (when (and folded (eq hidden 2))
+                             (if (stringp org-ellipsis) org-ellipsis "…"))
+                           (when (and (string-match-p "\n" (buffer-substring-no-properties position next))
+                                      ;; Org keeps a visible boundary newline
+                                      ;; after a folded subtree. Do not add a
+                                      ;; second blank line in front of it.
+                                      (not (eq (char-after next) ?\n))
+                                      (with-current-buffer snapshot
+                                        (and (> (point-max) (point-min))
+                                             (not (eq (char-before (point-max)) ?\n)))))
+                             "\n")))
                          ((and display (eq display previous-display)) "")
                          ((stringp display) display)
                          ((eq (car-safe display) 'image)
@@ -1183,7 +1226,17 @@ img { max-width: 100%%; height: auto; break-inside: avoid; }
       (when (buffer-live-p snapshot) (kill-buffer snapshot))
       (when (buffer-live-p html) (kill-buffer html)))))
 
-(defun my/org-export-visible-pdf (&optional file)
+(defun my/org-export-full-pdf (&optional file)
+  "Export all Org content without running Babel or changing the saved folds."
+  (interactive
+   (list (when (or current-prefix-arg (not buffer-file-name))
+           (read-file-name "Full Org PDF: " nil nil nil
+                           (concat (file-name-base (or buffer-file-name (buffer-name))) ".full.pdf")))))
+  (unless (derived-mode-p 'org-mode) (user-error "Use this command in an Org buffer"))
+  (my/org-export-visible-pdf
+   (or file (concat (file-name-sans-extension buffer-file-name) ".full.pdf")) t))
+
+(defun my/org-export-visible-pdf (&optional file expanded)
   "Export visible Org text/inline images with current faces to selectable PDF.
 Folds are preserved, not expanded.  No Babel cells are executed or saved.
 With a prefix argument, choose FILE instead of the adjacent .view.pdf."
@@ -1205,7 +1258,14 @@ With a prefix argument, choose FILE instead of the adjacent .view.pdf."
       (unwind-protect
           (let* ((html (expand-file-name "source.html" temporary))
                  (coding-system-for-write 'utf-8-unix)
-                 (content (my/org-visible-pdf-html)))
+                 (content (if expanded
+                              (save-excursion
+                                (save-restriction
+                                  (widen)
+                                  (org-fold-core-save-visibility t
+                                    (org-fold-show-all)
+                                    (my/org-visible-pdf-html))))
+                            (my/org-visible-pdf-html))))
             (with-temp-file html (insert content))
             (message "Printing visible Org buffer to PDF…")
             (let ((status (call-process browser nil log nil
@@ -1234,11 +1294,14 @@ With a prefix argument, choose FILE instead of the adjacent .view.pdf."
     (set-keymap-parent leader (meow--get-leader-keymap))
     (define-key export-map (kbd "p") #'my/org-export-visible-pdf)
     (define-key export-map (kbd "C-p") #'my/org-export-visible-pdf)
+    (define-key export-map (kbd "a") #'my/org-export-full-pdf)
+    (define-key export-map (kbd "C-a") #'my/org-export-full-pdf)
     (define-key leader (kbd "e") export-map)
     (setq-local meow-keypad-leader-dispatch leader)))
 
 (with-eval-after-load 'org
-  (define-key org-mode-map (kbd "C-c e p") #'my/org-export-visible-pdf))
+  (define-key org-mode-map (kbd "C-c e p") #'my/org-export-visible-pdf)
+  (define-key org-mode-map (kbd "C-c e a") #'my/org-export-full-pdf))
 (with-eval-after-load 'meow
   (add-hook 'org-mode-hook #'my/org-visible-pdf-meow-setup))
 #+end_src
@@ -1925,10 +1988,15 @@ Meow 是一个轻量的模态编辑框架，类似 Vim 但更贴合 Emacs 哲学
 使用 QWERTY 布局，hjkl 移动，支持选择优先 (selection-first) 的编辑模式。
 普通模式选中文本后按 ="=，用内置 =insert-pair= 包上双引号；不影响插入
 模式的自动配对。未选中时按 ="= 则插入一对空引号。
+macOS 上 =y= 复制到系统剪贴板，可在其它应用用 =⌘V= 粘贴；其它应用的
+=⌘C= 也能直接用 =p= 粘贴。仍保留 Emacs 自己的 kill-ring 历史。
 
 #+begin_src emacs-lisp
 (use-package meow
   :config
+  (when (eq system-type 'darwin)
+    (setq meow-use-clipboard t
+          select-enable-clipboard t))
   (defun meow-setup ()
     (setq meow-cheatsheet-layout meow-cheatsheet-layout-qwerty)
 
