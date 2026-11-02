@@ -147,6 +147,8 @@ Notebook 每个文件默认一个 Python 会话，cell 间共享变量。输出�
 
 进入 cell 编辑后默认是 Meow 普通模式；按 =i= 开始输入。它使用 Python
 语法高亮、补全和 Eglot/basedpyright；虚拟 =.py= 身份不会创建真实 Python 文件。
+临时编辑 buffer 复用项目语言服务器，最后一个使用者退出时释放服务器及目录监听，
+避免反复编辑 cell 后堆积进程、耗尽文件描述符。
 
 | 所处状态 | 操作 | 结果 |
 |----------+------+------|
@@ -1742,7 +1744,13 @@ finally:
             (meow--disable-current-state)
             (meow--switch-state 'normal)))
         (require 'eglot)
-        (eglot-ensure))))
+        ;; The virtual file identity is assigned AFTER major-mode hooks ran.
+        ;; Attach to an existing project server now; eglot-ensure alone starts
+        ;; another server when this temporary buffer isn't managed yet.
+        (setq-local eglot-autoshutdown t)
+        (eglot--maybe-activate-editing-mode)
+        (unless (bound-and-true-p eglot--managed-mode)
+          (eglot-ensure)))))
 
   (defun my/org-notebook-clear-result ()
     (interactive)
@@ -2103,7 +2111,10 @@ macOS 从 =~/Library/Rime=，Linux 从 =~/.local/share/fcitx5/rime= 自动生成
 GUI 中单按左 Shift（500ms 内释放）切换中文，=C-\= 是备用键；仅在 Meow INSERT
 有效。Shift 加其他键仍是原组合键；右 Shift 保持原样。进入 INSERT 默认英文，
 退出 INSERT 关闭输入法；预编辑中 Esc 直接取消并返回 NORMAL。切英文时按共享方案的
-左 Shift 规则处理预编辑。macOS 上 Emacs 和 Tinycast 由鼠须管 =ascii_mode= 强锁英文，不切换系统输入法。Linux 仍在焦点变化时用 fcitx5-remote 切到英文。此基础版针对 GUI；
+左 Shift 规则处理预编辑。macOS 系统输入法统一由 flakes 中的 Hammerspoon 管理：
+Emacs/Tinycast 用真正的 ABC，WezTerm（含 tmux）只有当前 pi 文本输入框用鼠须管中文。
+旧鼠须管 =app_options= 英文锁定和 Emacs/macism 的焦点切换已移除。
+Linux 仍在焦点变化时用 fcitx5-remote 切到英文。此基础版针对 GUI；
 终端不承诺单 Shift 事件和系统输入法隔离。
 
 词库同步为手动操作：先在鼠须管/Fcitx5 中“同步用户资料”，再 =M-x my/rime-sync=；
@@ -2348,43 +2359,27 @@ Mac 的 Karabiner 全配置由 Nix 管理，原设备/KikiBridge 设置在 flake
           (string-trim (buffer-string)))))
 
     (defun my/rime-release-os ()
-      (when my/rime--os-owned
-        (let ((state my/rime--external-state))
-          (setq my/rime--os-owned nil my/rime--external-state nil)
-          (condition-case err
-              (when (stringp state)
-                (if (eq system-type 'darwin) (my/rime--os-command state)
-                  (when (equal state "2") (my/rime--os-command "-o"))))
-            (error (message "Restore external IME: %s" (error-message-string err)))))))
-
-    (defvar my/rime--focus-timer nil)
-    (defun my/rime-front-bundle ()
-      "Frontmost app, or nil."
-      (when (eq system-type 'darwin)
-        (with-temp-buffer
-          (when (zerop (call-process "osascript" nil t nil "-e"
-                                     "tell application \"System Events\" to get bundle identifier of first process whose frontmost is true"))
-            (string-trim (buffer-string))))))
-    (defun my/rime-focus-apply ()
-      (setq my/rime--focus-timer nil)
-      (let ((front (ignore-errors (my/rime-front-bundle))))
-        ;; Tinycast is already up. Switching IME now dismisses it.
-        (unless (and front (string-match-p "tinycast" front))
-          (condition-case err
-              (if (seq-some (lambda (frame) (and (display-graphic-p frame)
-                                               (eq (frame-focus-state frame) t))) (frame-list))
-                  (unless my/rime--os-owned
-                    (let ((state (my/rime--os-command)))
-                      (if (eq system-type 'darwin) (my/rime--os-command "com.apple.keylayout.ABC")
-                        (unless (member state '("1" "2")) (error "Fcitx5 is not running"))
-                        (my/rime--os-command "-c"))
-                      (setq my/rime--external-state state my/rime--os-owned t)))
-                (my/rime-release-os))
-            (error (message "Emacs Rime focus integration: %s" (error-message-string err)))))))
+      "Restore Fcitx on Linux only. Hammerspoon owns macOS input sources."
+      (unless (eq system-type 'darwin)
+        (when my/rime--os-owned
+          (let ((state my/rime--external-state))
+            (setq my/rime--os-owned nil my/rime--external-state nil)
+            (when (equal state "2")
+              (condition-case err (my/rime--os-command "-o")
+                (error (message "Restore Fcitx: %s" (error-message-string err)))))))))
     (defun my/rime-focus-update ()
-      "Defer the OS IME change so a launcher hotkey is not consumed."
-      (when (timerp my/rime--focus-timer) (cancel-timer my/rime--focus-timer))
-      (setq my/rime--focus-timer (run-with-timer 0.4 nil #'my/rime-focus-apply)))
+      "Fcitx focus handling on Linux; never switch system sources on macOS."
+      (unless (eq system-type 'darwin)
+        (condition-case err
+            (if (seq-some (lambda (frame) (and (display-graphic-p frame)
+                                             (eq (frame-focus-state frame) t))) (frame-list))
+                (unless my/rime--os-owned
+                  (let ((state (my/rime--os-command)))
+                    (unless (member state '("1" "2")) (error "Fcitx5 is not running"))
+                    (my/rime--os-command "-c")
+                    (setq my/rime--external-state state my/rime--os-owned t)))
+              (my/rime-release-os))
+          (error (message "Emacs Rime focus integration: %s" (error-message-string err))))))
 
     ;; Rime clears preedit before commands not beginning with "rime-".  These
     ;; aliases preserve preedit until the dedicated toggle/escape handles it.
