@@ -1256,6 +1256,7 @@ Python 异常及 stderr 显示在当前 cell 的 =#+RESULTS= 中；失败时不�
 多线程执行等待本 cell 新建的非 daemon 线程完成后再结束，并收集工作线程
 异常。输出直接转发 Python 原始 stdout/stderr，不对 =print= 加锁、不整行
 整理、不排序或按线程分组；顺序与行内穿插由线程实际调度决定。
+结果就是 Python 的 stdout/stderr 原文：不加 =: = 引用、不转表、不删换行或制表符、不画成图片。窗口折行只影响显示，不改结果文字。重跑该 cell 后替换旧结果。
 不设置线程等待超时；=C-g= 会结束当前 Python 会话（变量清空），下次执行重建。
 后台 daemon 线程不等待，执行结束后的常规文本输出不污染下一 cell；线程池
 应使用 =with= 或显式 =shutdown()= 关闭，否则 Notebook 会一直等其工作线程。
@@ -1428,7 +1429,11 @@ finally:
                       (decode-coding-string (json-serialize marker) 'utf-8)))
              (output
               (condition-case err
-                  (apply original session wrapped args)
+                  ;; Babel's sender deletes trailing whitespace.  That turns
+                  ;; print("\n") into an empty result.  Keep those newlines.
+                  (cl-letf (((symbol-function 'org-babel-chomp)
+                             (lambda (string &rest _) string)))
+                    (apply original session wrapped args))
                 (quit
                  ;; Killing this session is the only reliable way to stop all
                  ;; its Python threads and prevent late output poisoning reruns.
@@ -1448,11 +1453,19 @@ finally:
                      ;; including multiprocessing workers/resource trackers.
                      (delete-process process)))
                  (signal (car err) (cdr err))))))
+        (when (stringp output)
+          (setq output (my/org-notebook-clean-output output org-babel-python-eoe-indicator)))
         (when (and (stringp output)
-                   (string-match (concat "^" (regexp-quote marker) "[\r\n]*\\'") output))
-          (setq output (string-trim-right (substring output 0 (match-beginning 0)))
+                   (string-match (concat (regexp-quote marker) "\\'") output))
+          (setq output (substring output 0 (match-beginning 0))
                 my/org-notebook--python-error-output output))
         output)))
+
+  (defun my/org-notebook-clean-output (output marker)
+    "Drop only Babel's end marker, never the cell's own whitespace."
+    (replace-regexp-in-string
+     (concat (regexp-quote marker) "[^\n]*\n?")
+     "" output))
 
   (defun my/org-notebook-python-evaluate-with-errors (original &rest args)
     "Return traceback text as the cell result for failed notebook Python cells."
@@ -1774,7 +1787,7 @@ finally:
           (setq-local org-babel-default-header-args:python
                       (copy-tree org-babel-default-header-args:python))
           (dolist (arg `((:session . ,my/org-notebook--session)
-                         (:results . "output replace") (:exports . "both")))
+                         (:results . "output raw replace") (:exports . "both")))
             (setf (alist-get (car arg) org-babel-default-header-args:python) (cdr arg)))
           (setq-local org-babel-python-command
                       (if (eq system-type 'windows-nt) "python" "python3")
@@ -1795,8 +1808,50 @@ finally:
         (if (nth 1 saved)
             (set (make-local-variable (car saved)) (nth 2 saved))
           (kill-local-variable (car saved))))
-      (setq my/org-notebook--saved-locals nil))
+      (setq my/org-notebook--saved-locals nil)
+      (when (derived-mode-p 'org-mode) (my/org-window-wrap-setup)))
     (my/org-notebook-refresh-text-style))
+
+  (defvar my/org-notebook--payload-length nil)
+
+  (defun my/org-notebook--verbatim-payload (result)
+    "Wrap RESULT without changing any of its characters."
+    (concat "#+begin_export ascii\n" result
+            (if (string-suffix-p "\n" result) "" "\n")
+            "#+end_export\n"))
+
+  (defun my/org-notebook-conceal-result-wrapper ()
+    "Hide only the export markers; the payload stays the original text."
+    (save-excursion
+      (unless (org-babel-where-is-src-block-head)
+        (ignore-errors (org-babel-previous-src-block)))
+      (when (org-babel-where-is-src-block-head)
+        (goto-char (org-element-end (org-element-at-point)))
+        (let ((bound (save-excursion (or (outline-next-heading) (point-max)))))
+        (when (re-search-forward "^[ \t]*#\\+RESULTS:" bound t)
+          (forward-line 1)
+          (let ((limit (org-babel-result-end))
+                (length my/org-notebook--payload-length))
+            (goto-char (line-beginning-position))
+            (when (looking-at "^[ \t]*#\\+begin_export\\>")
+              (let ((ov (make-overlay (line-beginning-position) (line-beginning-position 2))))
+                (overlay-put ov 'invisible t)
+                (overlay-put ov 'evaporate t))
+              (forward-line 1)
+              (when (numberp length)
+                (let* ((payload-end (min limit (+ (point) length)))
+                       (ov (make-overlay payload-end limit)))
+                  (overlay-put ov 'invisible t)
+                  (overlay-put ov 'evaporate t))))))))))
+
+  (defun my/org-notebook-insert-result (original result &optional result-params info &rest rest)
+    "Insert notebook stdout/stderr unchanged. Never render it as an image."
+    (if (not (and (bound-and-true-p my/org-notebook-mode) (stringp result)))
+        (apply original result result-params info rest)
+      (let ((my/org-notebook--payload-length (length result)))
+        (apply original (my/org-notebook--verbatim-payload result)
+               (cons "raw" (remove "raw" (or result-params '())))
+               info rest))))
 
   (defvar my/org-notebook--emulation-alist
     `((my/org-notebook-mode . ,my/org-notebook-mode-map)))
@@ -1830,7 +1885,7 @@ finally:
     (setq-local fringe-indicator-alist
                 (cons '(continuation left-curly-arrow right-curly-arrow)
                       (assq-delete-all 'continuation (copy-tree fringe-indicator-alist))))
-    ;; A visible table still owns truncation; only reset its prose baseline.
+    ;; A visible table still owns truncation; otherwise prose uses character wrap.
     (if (bound-and-true-p my/org-table-focus-state)
         (progn (setcar my/org-table-focus-state nil) (setq-local truncate-lines t))
       (setq-local truncate-lines nil))
@@ -1849,6 +1904,8 @@ finally:
                 #'my/org-notebook-python-send-with-errors)
     (advice-add 'org-babel-python-evaluate-session :around
                 #'my/org-notebook-python-evaluate-with-errors)
+    (advice-add 'org-babel-insert-result :around
+                #'my/org-notebook-insert-result)
     ;; Both Escape and C-c ' call this entrypoint; refresh only notebooks.
     (advice-add 'org-edit-src-exit :after #'my/org-notebook-refontify)
     (org-babel-do-load-languages
@@ -1978,8 +2035,7 @@ macOS 从 =~/Library/Rime=，Linux 从 =~/.local/share/fcitx5/rime= 自动生成
 GUI 中单按左 Shift（500ms 内释放）切换中文，=C-\= 是备用键；仅在 Meow INSERT
 有效。Shift 加其他键仍是原组合键；右 Shift 保持原样。进入 INSERT 默认英文，
 退出 INSERT 关闭输入法；预编辑中 Esc 直接取消并返回 NORMAL。切英文时按共享方案的
-左 Shift 规则处理预编辑。获得焦点时用 macism / fcitx5-remote 将系统输入法切到英文，
-离开时恢复之前状态；切换失败会阻止内置输入法启用，避免叠加。此基础版针对 GUI；
+左 Shift 规则处理预编辑。macOS 上 Emacs 和 Tinycast 由鼠须管 =ascii_mode= 强锁英文，不切换系统输入法。Linux 仍在焦点变化时用 fcitx5-remote 切到英文。此基础版针对 GUI；
 终端不承诺单 Shift 事件和系统输入法隔离。
 
 词库同步为手动操作：先在鼠须管/Fcitx5 中“同步用户资料”，再 =M-x my/rime-sync=；
@@ -2151,9 +2207,10 @@ Mac 的 Karabiner 全配置由 Nix 管理，原设备/KikiBridge 设置在 flake
       "Protect activation paths other than the Shift/C-backslash binding too."
       (unless (bound-and-true-p meow-insert-mode)
         (user-error "Emacs Rime is available only in Meow INSERT"))
-      (when (and (display-graphic-p) (not my/rime--os-owned))
-        (my/rime-focus-update)
-        (unless my/rime--os-owned (user-error "External IME could not be switched to English")))
+      (unless (eq system-type 'darwin)
+        (when (and (display-graphic-p) (not my/rime--os-owned))
+          (my/rime-focus-update)
+          (unless my/rime--os-owned (user-error "External IME could not be switched to English"))))
       (unless rime--lib-loaded (my/rime-prepare)))
 
     (defun my/rime-after-activate (&rest _)
@@ -2178,10 +2235,11 @@ Mac 的 Karabiner 全配置由 Nix 管理，原设备/KikiBridge 设置在 flake
                 (rime-inline-ascii)
                 (when-let* ((commit (rime-lib-get-commit))) (insert commit)))
               (deactivate-input-method))
-          (when (and (display-graphic-p) (not my/rime--os-owned))
-            (my/rime-focus-update)
-            (unless my/rime--os-owned
-              (user-error "Cannot ensure external IME is English; check macism/fcitx5-remote")))
+          (unless (eq system-type 'darwin)
+            (when (and (display-graphic-p) (not my/rime--os-owned))
+              (my/rime-focus-update)
+              (unless my/rime--os-owned
+                (user-error "Cannot ensure external IME is English; check fcitx5-remote"))))
           (require 'rime)
           (activate-input-method "rime")
           (rime-lib-set-option "ascii_mode" nil))))
@@ -2215,7 +2273,7 @@ Mac 的 Karabiner 全配置由 Nix 管理，原设备/KikiBridge 设置在 flake
       (rime-deploy))
 
     (defun my/rime--os-command (&rest arguments)
-      (let ((program (if (eq system-type 'darwin) "macism" "fcitx5-remote")))
+      (let ((program "fcitx5-remote"))
         (unless (executable-find program) (error "%s not installed" program))
         (with-temp-buffer
           (unless (zerop (apply #'call-process program nil t nil arguments)) (error "%s failed" program))
@@ -2231,19 +2289,34 @@ Mac 的 Karabiner 全配置由 Nix 管理，原设备/KikiBridge 设置在 flake
                   (when (equal state "2") (my/rime--os-command "-o"))))
             (error (message "Restore external IME: %s" (error-message-string err)))))))
 
+    (defvar my/rime--focus-timer nil)
+    (defun my/rime-front-bundle ()
+      "Frontmost app, or nil."
+      (when (eq system-type 'darwin)
+        (with-temp-buffer
+          (when (zerop (call-process "osascript" nil t nil "-e"
+                                     "tell application \"System Events\" to get bundle identifier of first process whose frontmost is true"))
+            (string-trim (buffer-string))))))
+    (defun my/rime-focus-apply ()
+      (setq my/rime--focus-timer nil)
+      (let ((front (ignore-errors (my/rime-front-bundle))))
+        ;; Tinycast is already up. Switching IME now dismisses it.
+        (unless (and front (string-match-p "tinycast" front))
+          (condition-case err
+              (if (seq-some (lambda (frame) (and (display-graphic-p frame)
+                                               (eq (frame-focus-state frame) t))) (frame-list))
+                  (unless my/rime--os-owned
+                    (let ((state (my/rime--os-command)))
+                      (if (eq system-type 'darwin) (my/rime--os-command "com.apple.keylayout.ABC")
+                        (unless (member state '("1" "2")) (error "Fcitx5 is not running"))
+                        (my/rime--os-command "-c"))
+                      (setq my/rime--external-state state my/rime--os-owned t)))
+                (my/rime-release-os))
+            (error (message "Emacs Rime focus integration: %s" (error-message-string err)))))))
     (defun my/rime-focus-update ()
-      "Keep the OS IME English while a GUI Emacs frame owns focus."
-      (condition-case err
-          (if (seq-some (lambda (frame) (and (display-graphic-p frame)
-                                           (eq (frame-focus-state frame) t))) (frame-list))
-              (unless my/rime--os-owned
-                (let ((state (my/rime--os-command)))
-                  (if (eq system-type 'darwin) (my/rime--os-command "com.apple.keylayout.ABC")
-                    (unless (member state '("1" "2")) (error "Fcitx5 is not running"))
-                    (my/rime--os-command "-c"))
-                  (setq my/rime--external-state state my/rime--os-owned t)))
-            (my/rime-release-os))
-        (error (message "Emacs Rime focus integration: %s" (error-message-string err)))))
+      "Defer the OS IME change so a launcher hotkey is not consumed."
+      (when (timerp my/rime--focus-timer) (cancel-timer my/rime--focus-timer))
+      (setq my/rime--focus-timer (run-with-timer 0.4 nil #'my/rime-focus-apply)))
 
     ;; Rime clears preedit before commands not beginning with "rime-".  These
     ;; aliases preserve preedit until the dedicated toggle/escape handles it.
@@ -2269,8 +2342,9 @@ Mac 的 Karabiner 全配置由 Nix 管理，原设备/KikiBridge 设置在 flake
             (add-hook 'meow-insert-enter-hook #'my/rime-leave-insert)
             (add-hook 'post-command-hook #'my/rime-normal-guard)
             (add-hook 'kill-emacs-hook #'my/rime-shutdown)
-            (add-function :after after-focus-change-function #'my/rime-focus-update)
-            (my/rime-focus-update))
+            (unless (eq system-type 'darwin)
+              (add-function :after after-focus-change-function #'my/rime-focus-update)
+              (my/rime-focus-update)))
         (remove-hook 'meow-insert-exit-hook #'my/rime-leave-insert)
         (remove-hook 'meow-insert-enter-hook #'my/rime-leave-insert)
         (remove-hook 'post-command-hook #'my/rime-normal-guard)
@@ -2284,6 +2358,33 @@ Mac 的 Karabiner 全配置由 Nix 管理，原设备/KikiBridge 设置在 flake
         (my/rime-release-os)))
     (setq rime-show-candidate 'posframe
           rime-posframe-style 'vertical)
+    ;; A font-spec object is an invalid frame font here. The name string is not.
+    (defun my/rime-font-name ()
+      (let* ((base (ignore-errors (face-attribute 'default :font)))
+             (size (and base (font-get base :size)))
+             (pixels (if (and (numberp size) (> size 0) (<= size 48)) size 16)))
+        (format "LXGW WenKai Mono-%d" pixels)))
+    (defvar my/rime--styling nil)
+    (defun my/rime-use-wenkai (frame)
+      "Map Han on this candidate frame. The frame font alone only changes Latin."
+      (when (frame-live-p frame)
+        (dolist (characters '(han kana cjk-misc bopomofo (#x3000 . #x303f) (#xff00 . #xffef)))
+          (set-fontset-font t characters (font-spec :family "LXGW WenKai Mono") frame))))
+    (defun my/rime-style-candidates (original content)
+      (if my/rime--styling
+          (funcall original content)
+        (let ((my/rime--styling t))
+          (setq rime-posframe-properties
+                (list :font (my/rime-font-name)
+                      :internal-border-width 8
+                      :left-fringe 0 :right-fringe 0))
+          (funcall original content)
+          (let* ((buffer (get-buffer rime-posframe-buffer))
+                 (frame (and buffer (buffer-local-value 'posframe--frame buffer))))
+            (when (frame-live-p frame)
+              (my/rime-use-wenkai frame)
+              (redraw-frame frame))))))
+    (advice-add 'rime--posframe-display-content :around #'my/rime-style-candidates)
     (add-to-list 'rime-disable-predicates #'my/rime--ascii-only)
     (advice-add 'rime-compile-module :override #'my/rime-core-rebuild-required)
     (advice-add 'rime-activate :before #'my/rime-before-activate)
