@@ -975,6 +975,35 @@ Valign's default X-LIMIT clips long fields, producing short right borders."
 
 (add-hook 'org-mode-hook #'my/org-table-focus-mode t)
 
+;; 花园式大纲：缩进负责结构，花朵负责层级，省略号负责折叠状态。
+(defun my/org-garden-heading-faces (&rest _)
+  "Give Org headings a theme-aware, gently stepped hierarchy."
+  (when (featurep 'org)
+    (let* ((dark (eq (frame-parameter nil 'background-mode) 'dark))
+           (colors (if dark
+                       '("#f5b8d1" "#cbb7f3" "#91d3c5" "#e8cf99"
+                         "#b1c8eb" "#c4c9da" "#c4c9da" "#c4c9da")
+                     '("#b73570" "#7952b3" "#277c79" "#8a6e30"
+                       "#456da5" "#68718b" "#68718b" "#68718b")))
+           (heights '(1.22 1.12 1.05 1.0 1.0 1.0 1.0 1.0)))
+      (cl-loop for level from 1 to 8
+               for color in colors for height in heights
+               do (set-face-attribute
+                   (intern (format "org-level-%d" level)) nil
+                   :foreground color :height height
+                   :weight (if (<= level 3) 'bold 'normal))))))
+
+(defun my/org-garden-outline-setup ()
+  "Indent the outline without adding whitespace to the document."
+  (setq-local org-indent-indentation-per-level 2
+              org-indent-mode-turns-on-hiding-stars t
+              org-indent-mode-turns-off-org-adapt-indentation t
+              org-adapt-indentation nil)
+  (org-indent-mode 1))
+
+(add-hook 'org-mode-hook #'my/org-garden-outline-setup)
+(add-hook 'enable-theme-functions #'my/org-garden-heading-faces t)
+
 (use-package org-modern
   :config
   ;; 添加窗口边框和分隔线
@@ -995,6 +1024,11 @@ Valign's default X-LIMIT clips long fields, producing short right borders."
    org-hide-emphasis-markers t       ; 隐藏 *粗体* /斜体/ 等标记符号
    org-pretty-entities t             ; 将 \alpha 等显示为 Unicode 符号
 
+   org-startup-indented t            ; 只缩进显示，不改写文件
+   org-modern-star 'replace
+   org-modern-replace-stars '("✿" "❀" "✽" "❧" "•" "◦")
+   org-modern-cycle-stars nil        ; 深层级不循环成一级大花
+
    ;; ── Agenda 样式 ──
    org-agenda-tags-column 0
    org-agenda-block-separator ?─
@@ -1009,6 +1043,7 @@ Valign's default X-LIMIT clips long fields, producing short right borders."
   (setq org-ellipsis "…")
   (set-face-attribute 'org-ellipsis nil :inherit 'default :box nil)
 
+  (my/org-garden-heading-faces)
   (global-org-modern-mode))
 
 (use-package valign
