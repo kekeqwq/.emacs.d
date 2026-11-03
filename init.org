@@ -975,7 +975,7 @@ Valign's default X-LIMIT clips long fields, producing short right borders."
 
 (add-hook 'org-mode-hook #'my/org-table-focus-mode t)
 
-;; 花园式大纲：缩进负责结构，花朵负责层级，省略号负责折叠状态。
+;; 花园式大纲：默认左对齐，花朵负责层级，省略号负责折叠状态。
 (defun my/org-garden-heading-faces (&rest _)
   "Give Org headings a theme-aware, gently stepped hierarchy."
   (when (featurep 'org)
@@ -993,15 +993,6 @@ Valign's default X-LIMIT clips long fields, producing short right borders."
                    :foreground color :height height
                    :weight (if (<= level 3) 'bold 'normal))))))
 
-(defun my/org-garden-outline-setup ()
-  "Indent the outline without adding whitespace to the document."
-  (setq-local org-indent-indentation-per-level 2
-              org-indent-mode-turns-on-hiding-stars t
-              org-indent-mode-turns-off-org-adapt-indentation t
-              org-adapt-indentation nil)
-  (org-indent-mode 1))
-
-(add-hook 'org-mode-hook #'my/org-garden-outline-setup)
 (add-hook 'enable-theme-functions #'my/org-garden-heading-faces t)
 
 (use-package org-modern
@@ -1024,7 +1015,7 @@ Valign's default X-LIMIT clips long fields, producing short right borders."
    org-hide-emphasis-markers t       ; 隐藏 *粗体* /斜体/ 等标记符号
    org-pretty-entities t             ; 将 \alpha 等显示为 Unicode 符号
 
-   org-startup-indented t            ; 只缩进显示，不改写文件
+   org-startup-indented nil          ; 保留默认左对齐，不递进缩进
    org-modern-star 'replace
    org-modern-replace-stars '("✿" "❀" "✽" "❧" "•" "◦")
    org-modern-cycle-stars nil        ; 深层级不循环成一级大花
