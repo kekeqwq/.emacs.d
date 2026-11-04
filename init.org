@@ -564,6 +564,53 @@ Cape 提供额外的 =completion-at-point= 后端函数，如 dabbrev（动态�
 #+end_src
 
 * 界面与外观
+** 全平台窗口透明
+
+默认不透明；手动开启后为 80% 不透明度。Linux 使用 =alpha-background= 仅透明背景（需合成器支持），
+其他 GUI 平台使用 =alpha= 普通整窗透明。=SPC t a= 或 =C-c t a= 切换透明；
+作用于所有普通 GUI frame，新窗口继承开关状态，不处理候选框等子窗口或终端。
+
+#+begin_src emacs-lisp
+(defcustom my/frame-opacity 80
+  "Opacity percentage used when window transparency is enabled."
+  :type 'integer :group 'frames)
+(defvar my/frame-transparency-enabled nil
+  "Whether ordinary GUI frames should be transparent.")
+
+(defun my/frame-transparency-parameters ()
+  "Return platform-specific parameters, resetting the unused mechanism."
+  (let ((opacity (if my/frame-transparency-enabled my/frame-opacity 100)))
+    (if (eq system-type 'gnu/linux)
+        `((alpha . 100) (alpha-background . ,opacity))
+      `((alpha . ,opacity) (alpha-background . 100)))))
+
+(defun my/apply-frame-transparency (&optional frame)
+  "Apply the shared transparency state to a non-child GUI FRAME."
+  (let ((frame (or frame (selected-frame))))
+    (when (and (frame-live-p frame) (display-graphic-p frame)
+               (not (frame-parent frame)))
+      (modify-frame-parameters frame (my/frame-transparency-parameters)))))
+
+(defun my/sync-frame-transparency ()
+  "Update existing frames and defaults for future frames."
+  (dolist (parameter (my/frame-transparency-parameters))
+    ;; setf replaces old settings instead of accumulating duplicate entries.
+    (setf (alist-get (car parameter) default-frame-alist) (cdr parameter))
+    (setf (alist-get (car parameter) initial-frame-alist) (cdr parameter)))
+  (mapc #'my/apply-frame-transparency (frame-list)))
+
+(defun my/toggle-frame-transparency ()
+  "Toggle transparency globally for ordinary GUI frames."
+  (interactive)
+  (setq my/frame-transparency-enabled (not my/frame-transparency-enabled))
+  (my/sync-frame-transparency)
+  (message "窗口透明：%s" (if my/frame-transparency-enabled "开启" "关闭")))
+
+(add-hook 'after-make-frame-functions #'my/apply-frame-transparency)
+(my/sync-frame-transparency)
+(global-set-key (kbd "C-c t a") #'my/toggle-frame-transparency)
+#+end_src
+
 ** 基础界面
 
 左右 fringe 指示栏继承当前背景，不固定为启动时的白色；新建 GUI frame
@@ -794,7 +841,8 @@ Org-modern 让 Org-mode 拥有更现代化的视觉效果：美化标题标记�
                     base nil (format "myorgsafe%d" (hash-table-count my/org-cjk-fontsets)))))
           (dolist (characters '(han cjk-misc bopomofo (#x3000 . #x303f) (#xff00 . #xffef)))
             (set-fontset-font set characters
-                              (font-spec :family my/org-cjk-font-family :size pixels)))
+                              ;; Let heading faces scale Han along with Latin and flowers.
+                              (font-spec :family my/org-cjk-font-family)))
           (puthash key set my/org-cjk-fontsets)))))
 (defvar my/org-cjk-font-warning-shown nil)
 
@@ -850,94 +898,10 @@ Org-modern 让 Org-mode 拥有更现代化的视觉效果：美化标题标记�
       (when modern (org-modern-mode 1)))
     (valign-mode 1)))
 
-(defvar-local my/org-table-focus-state nil
-  "Saved truncation and window scroll settings while focusing an Org table.")
-
-(defun my/org-table-focus-restore ()
-  "Restore the display settings saved on entering a table."
-  (when my/org-table-focus-state
-    (let ((state my/org-table-focus-state))
-      (setq my/org-table-focus-state nil)
-      (setq-local truncate-lines (car state))
-      (dolist (window (get-buffer-window-list (current-buffer) nil t))
-        (set-window-hscroll window (or (cdr (assq window (cadr state))) 0))))
-    (force-window-update (current-buffer))))
-
-(defvar-local my/org-table-focus-layout nil)
-(defvar-local my/org-table-focus-needs-align nil)
-(defvar my/org-table-focus-timer nil)
-
-(defun my/org-table-visible-layout ()
-  "Return (WINDOW . TABLE-STARTS) for windows showing real Org tables."
-  (let (layout)
-    (dolist (window (get-buffer-window-list (current-buffer) nil t))
-      (when (or (eq window (selected-window))
-                (eq (frame-visible-p (window-frame window)) t))
-        (save-excursion
-          (goto-char (max (point-min) (window-start window)))
-          (beginning-of-line)
-          (let ((end (min (point-max) (or (window-end window t) (point-max)))) tables)
-            (while (re-search-forward "^[ \t]*|" end t)
-              (unless (or (invisible-p (line-beginning-position)) (org-in-src-block-p))
-                (push (org-table-begin) tables)
-                (goto-char (min end (org-table-end)))))
-            (when tables (push (cons window (nreverse tables)) layout))))))
-    (nreverse layout)))
-
-(defun my/org-table-focus-schedule (&rest _)
-  "Defer alignment until redisplay/window resizing has completed."
-  (when (timerp my/org-table-focus-timer) (cancel-timer my/org-table-focus-timer))
-  (setq my/org-table-focus-timer
-        (run-with-idle-timer
-         0.1 nil
-         (lambda ()
-           (setq my/org-table-focus-timer nil)
-           (let (seen)
-             (walk-windows
-              (lambda (window)
-                (let ((buffer (window-buffer window)))
-                  (unless (memq buffer seen)
-                    (push buffer seen)
-                    (when (buffer-local-value 'my/org-table-focus-mode buffer)
-                      (with-selected-window window (my/org-table-focus-update t))))))
-              'no-minibuf 'visible))))))
-
-(defun my/org-table-focus-update (&optional align-now)
-  "Keep visible tables unwrapped, even when point is in prose or code."
-  (when (derived-mode-p 'org-mode)
-    (let* ((layout (my/org-table-visible-layout))
-           (key (mapcar (lambda (entry)
-                          (list (car entry) (window-body-width (car entry) t)
-                                (window-body-height (car entry) t) (cdr entry))) layout)))
-      (if layout
-          (progn
-            (unless my/org-table-focus-state
-              (setq my/org-table-focus-state
-                    (list truncate-lines
-                          (mapcar (lambda (window) (cons window (window-hscroll window)))
-                                  (get-buffer-window-list (current-buffer) nil t)))))
-            (setq-local truncate-lines t))
-        (my/org-table-focus-restore)
-        (setq my/org-table-focus-needs-align nil))
-      (unless (equal key my/org-table-focus-layout)
-        (setq my/org-table-focus-layout key
-              my/org-table-focus-needs-align (and layout t))
-        (force-window-update (current-buffer))
-        (unless align-now (my/org-table-focus-schedule)))
-      (when (and align-now my/org-table-focus-needs-align
-                 (bound-and-true-p valign-mode))
-        (setq my/org-table-focus-needs-align nil)
-        (let (seen)
-          (dolist (entry layout)
-            (with-selected-window (car entry)
-              (save-excursion
-                (dolist (start (cdr entry))
-                  (unless (memq start seen)
-                    (push start seen)
-                    (goto-char start)
-                    (condition-case err
-                        (valign-table)
-                      (error (message "Org table display: %s" (error-message-string err))))))))))))))
+;; Do not switch buffer-wide truncate-lines based on visible tables.
+;; That also truncates prose and creates scroll/redisplay feedback loops.
+;; Valign's own fontification handles pasted/edited tables without a custom
+;; window scanner, idle alignment timer, or changes to window scroll state.
 
 (defun my/org-valign-unclipped-width (original &rest arguments)
   "Measure full cells, not only the part fitting inside the window.
@@ -952,29 +916,6 @@ Valign's default X-LIMIT clips long fields, producing short right borders."
 (with-eval-after-load 'valign
   (advice-add 'valign--pixel-width-from-to :around #'my/org-valign-unclipped-width)
   (advice-add 'valign--pixel-x :around #'my/org-valign-unclipped-width))
-(add-hook 'window-size-change-functions #'my/org-table-focus-schedule)
-(add-hook 'window-buffer-change-functions #'my/org-table-focus-schedule)
-
-(define-minor-mode my/org-table-focus-mode
-  "Keep visible Org tables on single screen rows without changing text."
-  :lighter nil :group 'org
-  (if my/org-table-focus-mode
-      (progn
-        (unless (derived-mode-p 'org-mode)
-          (setq my/org-table-focus-mode nil)
-          (user-error "This display mode is only for Org buffers"))
-        (add-hook 'post-command-hook #'my/org-table-focus-update 90 t)
-        (add-hook 'window-scroll-functions #'my/org-table-focus-schedule nil t)
-        (add-hook 'change-major-mode-hook #'my/org-table-focus-restore nil t)
-        (my/org-table-focus-update))
-    (remove-hook 'post-command-hook #'my/org-table-focus-update t)
-    (remove-hook 'window-scroll-functions #'my/org-table-focus-schedule t)
-    (remove-hook 'change-major-mode-hook #'my/org-table-focus-restore t)
-    (setq my/org-table-focus-layout nil my/org-table-focus-needs-align nil)
-    (my/org-table-focus-restore)))
-
-(add-hook 'org-mode-hook #'my/org-table-focus-mode t)
-
 ;; 花园式大纲：默认左对齐，花朵负责层级，省略号负责折叠状态。
 (defun my/org-garden-heading-faces (&rest _)
   "Give Org headings a theme-aware, gently stepped hierarchy."
@@ -985,7 +926,7 @@ Valign's default X-LIMIT clips long fields, producing short right borders."
                          "#b1c8eb" "#c4c9da" "#c4c9da" "#c4c9da")
                      '("#b73570" "#7952b3" "#277c79" "#8a6e30"
                        "#456da5" "#68718b" "#68718b" "#68718b")))
-           (heights '(1.22 1.12 1.05 1.0 1.0 1.0 1.0 1.0)))
+           (heights '(1.35 1.20 1.10 1.0 1.0 1.0 1.0 1.0)))
       (cl-loop for level from 1 to 8
                for color in colors for height in heights
                do (set-face-attribute
@@ -994,6 +935,12 @@ Valign's default X-LIMIT clips long fields, producing short right borders."
                    :weight (if (<= level 3) 'bold 'normal))))))
 
 (add-hook 'enable-theme-functions #'my/org-garden-heading-faces t)
+
+(defun my/org-start-in-contents ()
+  "Open Org as a table of contents, including older showall notebooks."
+  (unless org-inhibit-startup
+    (org-content)))
+(add-hook 'org-mode-hook #'my/org-start-in-contents t)
 
 (use-package org-modern
   :config
@@ -1015,6 +962,7 @@ Valign's default X-LIMIT clips long fields, producing short right borders."
    org-hide-emphasis-markers t       ; 隐藏 *粗体* /斜体/ 等标记符号
    org-pretty-entities t             ; 将 \alpha 等显示为 Unicode 符号
 
+   org-startup-folded 'content       ; 默认展示全部标题，折叠正文
    org-startup-indented nil          ; 保留默认左对齐，不递进缩进
    org-modern-star 'replace
    org-modern-replace-stars '("✿" "❀" "✽" "❧" "•" "◦")
@@ -1063,12 +1011,10 @@ Org 中文使用 =LXGW WenKai Mono=（霞鹜文楷等宽版），英文始终保
 若原表格文本尚未对齐，把光标放入表格按 =Tab= 或 =M-x org-table-align=；
 字体设置本身不改写文件或表格内容。
 
-表格出现在可见区域时自动禁止折行，超宽列可用 =C-x <= / =C-x >= 横向查看；
-不依赖光标是否在表格内。所有窗口都看不到表格时，恢复正文按字符贴边折行及之前的横向位置。
-窗口大小变化后自动重新对齐，测量完整单元格而非窗口内被截断的部分，防止右边框参差。
-源代码块里的竖线不触发此行为；不缩小字体，不修改文本。此开关作用于整个 buffer，
-所以表格可见期间，同 buffer 的正文及其他窗口也暂时不折行。
-=M-x my/org-table-focus-mode= 可关闭该自动切换。
+表格继续由 valign 像素对齐，测量完整单元格，不缩小字体，不修改文本。
+不再根据可见表格切换整篇笔记的截断状态，也不在滚动/空闲回调中扫描并重排窗口；
+避免外部粘贴表格后正文一起被截断，以及滚动与重绘相互触发而卡住。
+宽表格遵循 Org 的正常折行显示，不再保证每个逻辑表格行只占一个屏幕行。
 Org 正文与普通代码 buffer 一样按字符贴边折行，并显示左右边缘的折行箭头；
 不再启用按词换行的 =visual-line-mode=。此设置不启用 Org 内的代码缩进竖线。
 
@@ -1968,7 +1914,7 @@ finally:
     (find-file file)
     (unless (= (buffer-size) 0) (user-error "Notebook buffer is not empty"))
     (insert "#+title: " (file-name-base file)
-            "\n#+filetags: :notebook:\n#+startup: showall inlineimages\n\n"
+            "\n#+filetags: :notebook:\n#+startup: content inlineimages\n\n"
             "* Notes\n\n* Code\n\n#+begin_src python\nprint(\"Hello, notebook!\")\n#+end_src\n")
     (my/org-notebook-mode 1)
     (goto-char (point-min))
@@ -1982,13 +1928,8 @@ finally:
     (setq-local fringe-indicator-alist
                 (cons '(continuation left-curly-arrow right-curly-arrow)
                       (assq-delete-all 'continuation (copy-tree fringe-indicator-alist))))
-    ;; A visible table still owns truncation; otherwise prose uses character wrap.
-    (if (bound-and-true-p my/org-table-focus-state)
-        (progn (setcar my/org-table-focus-state nil) (setq-local truncate-lines t))
-      (setq-local truncate-lines nil))
-    (when (bound-and-true-p my/org-table-focus-mode)
-      (setq my/org-table-focus-layout nil)
-      (my/org-table-focus-update)))
+    ;; Keep wrapping stable across paste, redisplay, scrolling and tables.
+    (setq-local truncate-lines nil))
 
   (use-package org
     :ensure nil
@@ -2054,6 +1995,7 @@ macOS 上 =y= 复制到系统剪贴板，可在其它应用用 =⌘V= 粘贴；�
      '("8" . meow-digit-argument)
      '("9" . meow-digit-argument)
      '("0" . meow-digit-argument)
+     '("t a" . my/toggle-frame-transparency)
      '("/" . meow-keypad-describe-key)
      '("?" . meow-cheatsheet))
 

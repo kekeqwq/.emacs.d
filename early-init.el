@@ -13,8 +13,7 @@
       (append
        '((menu-bar-lines . 0)
          (tool-bar-lines . 0)
-         (vertical-scroll-bars . nil)
-         (alpha-background . 80))
+         (vertical-scroll-bars . nil))
        default-frame-alist))
 
 (let ((size (pcase system-type
@@ -36,9 +35,6 @@
           (set-fontset-font t charset "Microsoft YaHei" frame)))))
   (add-hook 'after-make-frame-functions #'my/windows-cjk-font)
   (add-hook 'window-setup-hook #'my/windows-cjk-font))
-
-(when (memq system-type '(darwin windows-nt))
-  (add-to-list 'default-frame-alist '(alpha . 80)))
 
 ;; Windows emacs -nw：w32console 会设成 OEM（常为 cp936），
 ;; ▶ / … 等编不进去就会显示成 \u25B6。TTY 改为 UTF-8。
