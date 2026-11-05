@@ -942,6 +942,29 @@ Valign's default X-LIMIT clips long fields, producing short right borders."
     (org-content)))
 (add-hook 'org-mode-hook #'my/org-start-in-contents t)
 
+(defun my/org-garden-fontify-headings (begin end)
+  "Restore headline flowers after Org has fontified surrounding blocks.
+Only touch headings in the invalidated fontification region; no scroll hooks."
+  (when (and (bound-and-true-p org-modern-mode)
+             (eq org-modern-star 'replace))
+    (with-silent-modifications
+      (save-excursion
+        (save-match-data
+          (goto-char begin)
+          (beginning-of-line)
+          (while (re-search-forward "^\\(\\**\\)\\* " end t)
+            (let ((match (match-data)))
+              (when (eq (org-element-type (org-element-at-point)) 'headline)
+                (set-match-data match)
+                (org-modern--star)))))))))
+
+(defun my/org-garden-fontification-setup ()
+  "Run the small headline display pass after ordinary Org fontification."
+  (if (bound-and-true-p org-modern-mode)
+      (add-hook 'jit-lock-functions #'my/org-garden-fontify-headings 90 t)
+    (remove-hook 'jit-lock-functions #'my/org-garden-fontify-headings t)))
+(add-hook 'org-modern-mode-hook #'my/org-garden-fontification-setup)
+
 (use-package org-modern
   :config
   ;; 添加窗口边框和分隔线
@@ -1268,6 +1291,10 @@ With a prefix argument, choose FILE instead of the adjacent .view.pdf."
     (set-keymap-parent leader (meow--get-leader-keymap))
     (define-key export-map (kbd "p") #'my/org-export-visible-pdf)
     (define-key export-map (kbd "C-p") #'my/org-export-visible-pdf)
+    (define-key export-map (kbd "l") #'my/org-latex-preview)
+    (define-key export-map (kbd "C-l") #'my/org-latex-preview)
+    (define-key export-map (kbd "m") #'my/org-latex-wrap-and-preview)
+    (define-key export-map (kbd "C-m") #'my/org-latex-wrap-and-preview)
     (define-key export-map (kbd "a") #'my/org-export-full-pdf)
     (define-key export-map (kbd "C-a") #'my/org-export-full-pdf)
     (define-key leader (kbd "e") export-map)
@@ -1278,6 +1305,83 @@ With a prefix argument, choose FILE instead of the adjacent .view.pdf."
   (define-key org-mode-map (kbd "C-c e a") #'my/org-export-full-pdf))
 (with-eval-after-load 'meow
   (add-hook 'org-mode-hook #'my/org-visible-pdf-meow-setup))
+#+end_src
+
+* Org LaTeX 公式（普通 Org 与 Python Notebook）
+
+行内公式写成 =\( ... \)=，独立公式写成 =\[ ... \]=。
+=SPC e l= / =C-c e l= 切换当前位置或选区公式预览（原生 =C-c C-x C-l= 也可）；
+=SPC e m= / =C-c e m= 将选区或当前段落的裸公式包进独立公式后预览。
+预览使用 LaTeX → SVG（文字转路径，不依赖 SVG 查看器字体），不执行 Babel。
+Notebook 的正文仍按原样显示，但显式标记的数学公式支持相同预览；Python 源码、
+结果块不自动转换。预览只是 overlay，原公式保留，可切回源码编辑。
+打开文件默认预览；=org-fragtog= 在光标进入公式时临时展示源码，离开后重新预览。
+使用 SVG 矢量输出，不是按 DPI 固定的位图。
+
+#+begin_src emacs-lisp
+(defconst my/org-latex-preview-header
+  (concat "\\documentclass{article}\n"
+          "\\usepackage{amsmath,amssymb,xcolor,lmodern}\n"
+          "\\renewcommand{\\familydefault}{\\sfdefault}\n"
+          "\\AtBeginDocument{\\bfseries\\boldmath}\n"
+          "\\pagestyle{empty}\n")
+  "Readable vector-preview preamble with bold, sans-serif text labels.")
+
+(defun my/org-latex-setup ()
+  "Configure native math previews identically in Org and notebooks."
+  (setq-local org-preview-latex-default-process 'dvisvgm)
+  (setq-local org-format-latex-options
+              (plist-put (copy-sequence org-format-latex-options) :scale 1.65))
+  ;; Preview-only header: avoid pulling export-only document packages into
+  ;; each fragment.  amsmath provides \\text and \\underbrace annotations.
+  (setq-local org-format-latex-header my/org-latex-preview-header))
+
+(defun my/org-latex-preview ()
+  "Toggle native preview without running Python or other Babel blocks."
+  (interactive)
+  (unless (derived-mode-p 'org-mode) (user-error "请在 Org 中预览公式"))
+  (my/org-latex-setup)
+  (unless (and (executable-find "latex") (executable-find "dvisvgm"))
+    (user-error "公式预览需要 Nix 的 latex 和 dvisvgm；请更新 flakes 配置"))
+  (org-latex-preview current-prefix-arg))
+
+(defun my/org-latex-wrap-and-preview (begin end)
+  "Wrap a region or the paragraph at point as display math, then preview."
+  (interactive
+   (if (use-region-p) (list (region-beginning) (region-end))
+     (let ((bounds (bounds-of-thing-at-point 'paragraph)))
+       (unless bounds (user-error "请选中 LaTeX 公式"))
+       (list (car bounds) (cdr bounds)))))
+  (when (org-in-src-block-p) (user-error "不要将 Python 源码转换成公式"))
+  (let ((text (string-trim (buffer-substring-no-properties begin end))))
+    (when (string-empty-p text) (user-error "请选中 LaTeX 公式"))
+    (when (or (string-prefix-p "\\[" text) (string-prefix-p "\\(" text)
+              (string-prefix-p "$" text))
+      (user-error "公式已有分隔符，请直接使用 C-c e l"))
+    (atomic-change-group
+      (delete-region begin end)
+      (goto-char begin)
+      (unless (bolp) (insert "\n"))
+      (insert "\\[\n" text "\n\\]\n"))
+    (backward-char 3)
+    (deactivate-mark)
+    (my/org-latex-preview)))
+
+(add-hook 'org-mode-hook #'my/org-latex-setup)
+(with-eval-after-load 'org
+  ;; Org runs initial previews BEFORE org-mode-hook. Set the defaults too,
+  ;; so first-open preview uses SVG and the same header as manual preview.
+  (setq org-startup-with-latex-preview t
+        org-preview-latex-default-process 'dvisvgm
+        org-format-latex-header my/org-latex-preview-header
+        org-format-latex-options
+        (plist-put (copy-sequence org-format-latex-options) :scale 1.65))
+  (define-key org-mode-map (kbd "C-c e l") #'my/org-latex-preview)
+  (define-key org-mode-map (kbd "C-c e m") #'my/org-latex-wrap-and-preview))
+
+(use-package org-fragtog
+  :after org
+  :hook (org-mode . org-fragtog-mode))
 #+end_src
 
 * Org Python Notebook
