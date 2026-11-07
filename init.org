@@ -376,30 +376,145 @@ grammar 会继续被找到；没有的会由 Emacs 自己装到该目录或
 (global-set-key (kbd "C-c w 3") 'split-window-right)
 
 ;; ── Buffer 操作 ──
-(global-set-key (kbd "C-c b b") 'ido-switch-buffer)
-(global-set-key (kbd "C-c b k") 'ido-kill-buffer)
+(global-set-key (kbd "C-c b b") 'consult-buffer)
+(global-set-key (kbd "C-c b k") 'kill-buffer)
 
 ;; ── Org 待办 ──
 (global-set-key (kbd "C-c t t") 'org-agenda-show-all-todo)
 #+end_src
 
 * 补全框架
-** Fido (内置迷你补全)
+** Vertico 迷你缓冲区补全
 
-Fido 是 Emacs 内置的类 Ido 补全框架。这里启用了垂直显示模式，
-并定义了一个快速打开最近文件的命令。
+Vertico 管候选列表，Orderless 管无序多词匹配，Marginalia 管说明，
+Consult 管搜索和实时预览，Embark 管候选操作；不替换 Corfu/Cape 代码补全。
+GUI 默认居中浮窗，颜色随主题变化；Consult 正文搜索默认底部显示，终端也用底部列表。
+=SPC t v= / =C-c t v= 开关后续补全会话的浮窗。
+
+| 按键 | 操作 |
+|------+------|
+| =M-x= | 命令，带说明与无序关键词匹配 |
+| =C-x b= / =C-c b b= | Buffer 切换与预览 |
+| =C-c r= | 最近文件 |
+| =C-c s l= | 当前 buffer 内容搜索、预览 |
+| =C-c s r= | 项目 ripgrep 搜索 |
+| =M-y= | 浏览剪贴历史 |
+| =C-.= / =C-;= | Embark 候选操作 / 默认操作 |
+
+候选中 =C-n/C-p= 上下选择，=TAB= 补入候选，=RET= 确认，
+=M-RET= 提交原始输入（如创建新文件），=C-g= 取消。
 
 #+begin_src emacs-lisp
-(fido-mode 1)
-(fido-vertical-mode 1)
+(setq enable-recursive-minibuffers t
+      read-extended-command-predicate #'command-completion-default-include-p
+      minibuffer-prompt-properties '(read-only t cursor-intangible t face minibuffer-prompt))
+(add-hook 'minibuffer-setup-hook #'cursor-intangible-mode)
 
-(defun fido-recentf-open ()
-  "使用 completing-read 打开最近访问的文件。"
+(use-package vertico
+  :demand t
+  :custom
+  (vertico-count 12)
+  (vertico-resize t)
+  (vertico-cycle t)
+  :config
+  (vertico-mode 1)
+  (require 'vertico-directory)
+  (define-key vertico-map (kbd "RET") #'vertico-directory-enter)
+  (define-key vertico-map (kbd "DEL") #'vertico-directory-delete-char)
+  (define-key vertico-map (kbd "M-DEL") #'vertico-directory-delete-word))
+
+(use-package orderless
+  :demand t
+  :config
+  ;; Minibuffer matching only: keep CAPF/Corfu's existing category behavior.
+  (defun my/minibuffer-completion-styles ()
+    (setq-local completion-styles '(orderless basic)
+                completion-category-defaults nil
+                completion-category-overrides '((file (styles basic partial-completion)))
+                completion-pcm-leading-wildcard t))
+  (add-hook 'minibuffer-setup-hook #'my/minibuffer-completion-styles))
+
+(use-package marginalia
+  :after vertico
+  :demand t
+  :config (marginalia-mode 1))
+
+(use-package consult
+  :demand t
+  :bind (("C-x b" . consult-buffer)
+         ("C-c b b" . consult-buffer)
+         ("C-c r" . consult-recent-file)
+         ("C-c s l" . consult-line)
+         ("C-c s r" . consult-ripgrep)
+         ("M-y" . consult-yank-pop))
+  :config
+  (setq consult-preview-key '(:debounce 0.2 any))
+  (consult-customize consult-ripgrep consult-grep consult-find
+                    :preview-key '(:debounce 0.4 any)))
+
+(use-package embark
+  :bind (("C-." . embark-act) ("C-;" . embark-dwim))
+  :init (setq prefix-help-command #'embark-prefix-help-command))
+
+(use-package embark-consult
+  :after (embark consult)
+  :demand t
+  :hook (embark-collect-mode . consult-preview-at-point-mode))
+
+(use-package nerd-icons-completion
+  :after (marginalia nerd-icons)
+  :demand t
+  :config
+  (nerd-icons-completion-mode 1)
+  (add-hook 'marginalia-mode-hook #'nerd-icons-completion-marginalia-setup)
+  (nerd-icons-completion-marginalia-setup))
+
+(defvar my/completion-floating-enabled t)
+(defun my/completion-sync-theme (&rest _)
+  "Give completion popups the active theme and a thin accent border."
+  (when (facep 'vertico-posframe)
+    (let ((fg (face-attribute 'default :foreground nil t))
+          (bg (face-attribute 'default :background nil t))
+          (accent (face-attribute 'font-lock-keyword-face :foreground nil t)))
+      (set-face-attribute 'vertico-posframe nil :inherit 'default :foreground fg :background bg)
+      (set-face-attribute 'vertico-current nil :inherit 'highlight :weight 'bold)
+      (dolist (face '(vertico-posframe-border vertico-posframe-border-2
+                      vertico-posframe-border-3 vertico-posframe-border-4
+                      vertico-posframe-border-fallback))
+        (when (facep face) (set-face-background face accent))))))
+
+(defun my/completion-toggle-posframe ()
+  "Toggle floating completion for subsequent minibuffer sessions."
   (interactive)
-  (if (find-file (completing-read "Find recent file: " recentf-list))
-      (message "Opening file...")
-    (message "Aborting")))
-(global-set-key (kbd "C-c r") 'fido-recentf-open)
+  (setq my/completion-floating-enabled (not my/completion-floating-enabled))
+  (when (boundp 'vertico-multiform-commands)
+    (setf (alist-get t vertico-multiform-commands)
+          (and my/completion-floating-enabled '(posframe))))
+  (message "补全浮窗：%s（下次补全生效）" (if my/completion-floating-enabled "开启" "关闭")))
+(global-set-key (kbd "C-c t v") #'my/completion-toggle-posframe)
+
+(use-package vertico-posframe
+  :after vertico
+  :demand t
+  :config
+  (require 'vertico-multiform)
+  (setq vertico-posframe-border-width 1
+        vertico-posframe-min-width 60
+        vertico-posframe-parameters '((left-fringe . 8) (right-fringe . 8)
+                                     (alpha . 100) (alpha-background . 100))
+        vertico-multiform-commands
+        `((consult-line (:not posframe))
+          (consult-line-multi (:not posframe))
+          (consult-ripgrep (:not posframe))
+          (consult-grep (:not posframe))
+          (consult-find (:not posframe))
+          (consult-outline (:not posframe))
+          (consult-imenu (:not posframe))
+          (t ,@(and my/completion-floating-enabled '(posframe)))))
+  ;; Multiform owns activation per command; never enable posframe globally.
+  (vertico-multiform-mode 1)
+  (add-hook 'enable-theme-functions #'my/completion-sync-theme t)
+  (my/completion-sync-theme))
 #+end_src
 
 ** Corfu (弹出式补全)
@@ -2100,6 +2215,7 @@ macOS 上 =y= 复制到系统剪贴板，可在其它应用用 =⌘V= 粘贴；�
      '("9" . meow-digit-argument)
      '("0" . meow-digit-argument)
      '("t a" . my/toggle-frame-transparency)
+     '("t v" . my/completion-toggle-posframe)
      '("/" . meow-keypad-describe-key)
      '("?" . meow-cheatsheet))
 
@@ -2500,19 +2616,60 @@ Mac 的 Karabiner 全配置由 Nix 管理，原设备/KikiBridge 设置在 flake
              (pixels (if (and (numberp size) (> size 0) (<= size 48)) size 16)))
         (format "LXGW WenKai Mono-%d" pixels)))
     (defvar my/rime--styling nil)
+    (defun my/rime-sync-theme (&rest _)
+      "Keep candidate faces and the existing child frame on the active theme."
+      (when (facep 'rime-default-face)
+        (let ((fg (face-attribute 'default :foreground nil t))
+              (bg (face-attribute 'default :background nil t))
+              (border (face-attribute 'font-lock-keyword-face :foreground nil t)))
+          (set-face-attribute 'rime-default-face nil :inherit 'default
+                              :foreground fg :background bg)
+          (set-face-attribute 'rime-code-face nil :inherit 'font-lock-keyword-face
+                              :foreground 'unspecified :background 'unspecified)
+          (set-face-attribute 'rime-highlight-candidate-face nil :inherit 'highlight
+                              :foreground fg
+                              :background (face-attribute 'highlight :background nil t)
+                              :weight 'bold)
+          (dolist (face '(rime-comment-face rime-candidate-num-face))
+            (set-face-attribute face nil :inherit 'shadow
+                                :foreground 'unspecified :background 'unspecified))
+          (set-face-attribute 'rime-cursor-face nil :inherit 'default
+                              :foreground 'unspecified :background 'unspecified)
+          (when-let* ((buffer (get-buffer rime-posframe-buffer))
+                      (frame (buffer-local-value 'posframe--frame buffer))
+                      ((frame-live-p frame)))
+            (modify-frame-parameters frame `((background-color . ,bg) (foreground-color . ,fg)
+                                              (internal-border-color . ,border)))
+            (dolist (face '(internal-border child-frame-border))
+              (when (facep face) (set-face-background face border frame)))))))
     (defun my/rime-use-wenkai (frame)
-      "Map Han on this candidate frame. The frame font alone only changes Latin."
+      "Use WenKai for Chinese and explicit emoji/symbol fallback on FRAME."
       (when (frame-live-p frame)
         (dolist (characters '(han kana cjk-misc bopomofo (#x3000 . #x303f) (#xff00 . #xffef)))
-          (set-fontset-font t characters (font-spec :family "LXGW WenKai Mono") frame))))
+          (set-fontset-font t characters (font-spec :family "LXGW WenKai Mono") frame))
+        (let* ((families (font-family-list frame))
+               (emoji (cl-find-if (lambda (family) (member family families))
+                                  '("Apple Color Emoji" "Segoe UI Emoji"
+                                    "Noto Color Emoji" "Noto Emoji")))
+               (symbols (cl-find-if (lambda (family) (member family families))
+                                    '("Noto Sans Symbols 2" "Apple Symbols" "Segoe UI Symbol"))))
+          (when symbols
+            (set-fontset-font t 'symbol (font-spec :family symbols) frame 'append))
+          (when emoji
+            (dolist (characters '(emoji (#x1f000 . #x1faff)))
+              (set-fontset-font t characters (font-spec :family emoji) frame 'prepend))))))
+    (add-hook 'enable-theme-functions #'my/rime-sync-theme t)
+    (my/rime-sync-theme)
     (defun my/rime-style-candidates (original content)
       (if my/rime--styling
           (funcall original content)
         (let ((my/rime--styling t))
+          (my/rime-sync-theme)
           (setq rime-posframe-properties
                 (list :font (my/rime-font-name)
-                      :internal-border-width 8
-                      :left-fringe 0 :right-fringe 0))
+                      :border-color (face-attribute 'font-lock-keyword-face :foreground nil t)
+                      :border-width 1
+                      :left-fringe 6 :right-fringe 6))
           (funcall original content)
           (let* ((buffer (get-buffer rime-posframe-buffer))
                  (frame (and buffer (buffer-local-value 'posframe--frame buffer))))
