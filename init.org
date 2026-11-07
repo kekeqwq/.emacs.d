@@ -471,17 +471,51 @@ GUI 默认居中浮窗，颜色随主题变化；Consult 正文搜索默认底�
 
 (defvar my/completion-floating-enabled t)
 (defun my/completion-sync-theme (&rest _)
-  "Give completion popups the active theme and a thin accent border."
-  (when (facep 'vertico-posframe)
-    (let ((fg (face-attribute 'default :foreground nil t))
-          (bg (face-attribute 'default :background nil t))
-          (accent (face-attribute 'font-lock-keyword-face :foreground nil t)))
-      (set-face-attribute 'vertico-posframe nil :inherit 'default :foreground fg :background bg)
-      (set-face-attribute 'vertico-current nil :inherit 'highlight :weight 'bold)
-      (dolist (face '(vertico-posframe-border vertico-posframe-border-2
-                      vertico-posframe-border-3 vertico-posframe-border-4
-                      vertico-posframe-border-fallback))
-        (when (facep face) (set-face-background face accent))))))
+  "Unify minibuffer and LSP completion colors without changing matching."
+  (let ((fg (face-attribute 'default :foreground nil t))
+        (bg (face-attribute 'default :background nil t))
+        (selected (face-attribute 'highlight :background nil t))
+        (accent (face-attribute 'font-lock-keyword-face :foreground nil t)))
+    (dolist (face '(vertico-posframe corfu-default))
+      (when (facep face)
+        (set-face-attribute face nil :inherit 'default :foreground fg :background bg)))
+    (dolist (face '(vertico-current corfu-current))
+      (when (facep face)
+        (set-face-attribute face nil :inherit 'highlight
+                            :foreground fg :background selected :weight 'bold)))
+    (dolist (face '(vertico-posframe-border vertico-posframe-border-2
+                    vertico-posframe-border-3 vertico-posframe-border-4
+                    vertico-posframe-border-fallback corfu-border corfu-bar))
+      (when (facep face) (set-face-background face accent)))
+    (when (facep 'corfu-annotations)
+      (set-face-attribute 'corfu-annotations nil :inherit 'shadow
+                          :foreground 'unspecified :background 'unspecified))
+    ;; Completion matching uses the same accent in both UIs, rather than
+    ;; a separate blue/orange palette. Never recolor source syntax faces.
+    (dolist (face '(completions-common-part orderless-match-face-0
+                    orderless-match-face-1 orderless-match-face-2 orderless-match-face-3))
+      (when (facep face)
+        (set-face-attribute face nil :foreground accent :background 'unspecified :weight 'bold)))
+    (when (facep 'completions-first-difference)
+      (set-face-attribute 'completions-first-difference nil
+                          :foreground fg :background 'unspecified :weight 'normal))
+    ;; Also update already-created child frames; cached frame backgrounds
+    ;; do not necessarily follow a named face until the next popup rebuild.
+    (dolist (frame (list (and (boundp 'corfu--frame) corfu--frame)
+                         (and (boundp 'vertico-posframe--buffer)
+                              (buffer-live-p vertico-posframe--buffer)
+                              (buffer-local-value 'posframe--frame vertico-posframe--buffer))))
+      (when (frame-live-p frame)
+        (unless (equal (frame-parameter frame 'background-color) bg)
+          (modify-frame-parameters frame `((background-color . ,bg) (foreground-color . ,fg))))
+        (dolist (face '(internal-border child-frame-border))
+          (when (and (facep face) (not (equal (face-background face frame t) accent)))
+            (set-face-background face accent frame)))))
+    ;; SVG icons cache resolved colors: regenerate them after theme changes.
+    (when (featurep 'kind-icon)
+      (setq kind-icon-default-face 'corfu-default
+            kind-icon-blend-background nil)
+      (kind-icon-reset-cache))))
 
 (defun my/completion-toggle-posframe ()
   "Toggle floating completion for subsequent minibuffer sessions."
@@ -520,6 +554,8 @@ GUI 默认居中浮窗，颜色随主题变化；Consult 正文搜索默认底�
 ** Corfu (弹出式补全)
 
 Corfu 在光标处显示补全候选弹窗，轻量且快速，替代 company-mode。
+与 Vertico 共用主题背景、选中行、强调色匹配和细边框；图标缓存随主题重新生成。
+只统一外观，不改变 Eglot/LSP、CAPF 或 Corfu 的补全行为。
 
 #+begin_src emacs-lisp
   (use-package corfu
@@ -528,7 +564,10 @@ Corfu 在光标处显示补全候选弹窗，轻量且快速，替代 company-mo
     (corfu-cycle t)
     (global-corfu-minibuffer nil)
     :init
-    (global-corfu-mode))
+    (global-corfu-mode)
+    :config
+    (setq corfu-border-width 1)
+    (my/completion-sync-theme))
 #+end_src
 
 ** Kind-icon (补全图标)
@@ -547,7 +586,8 @@ Corfu 在光标处显示补全候选弹窗，轻量且快速，替代 company-mo
             '(:padding -1.2 :stroke 0 :margin 0 :radius 0 :height 0.3 :scale 1.0))
       (kind-icon-reset-cache))
     ;; ----------------------------
-    (add-to-list 'corfu-margin-formatters #'kind-icon-margin-formatter))
+    (add-to-list 'corfu-margin-formatters #'kind-icon-margin-formatter)
+    (my/completion-sync-theme))
 #+end_src
 
 ** Cape (补全后端扩展)
