@@ -2256,8 +2256,9 @@ macOS 上 =y= 复制到系统剪贴板，可在其它应用用 =⌘V= 粘贴；�
      '("0" . meow-digit-argument)
      '("t a" . my/toggle-frame-transparency)
      '("t v" . my/completion-toggle-posframe)
+     '("t s" . my/python-scratch)
      '("/" . meow-keypad-describe-key)
-     '("?" . meow-cheatsheet))
+     '("?" . my/keybinding-cheatsheet))
 
     ;; ── Normal state: 主要编辑键位 ──
     (meow-normal-define-key
@@ -2326,6 +2327,101 @@ macOS 上 =y= 复制到系统剪贴板，可在其它应用用 =⌘V= 粘贴；�
 
   (meow-setup)
   (meow-global-mode 1))
+#+end_src
+
+* 动态键位速查
+
+普通模式 =SPC ?= 使用居中 Vertico 浮窗，读取实时 Meow 普通模式键位和当前
+buffer 的 SPC leader keymap（包含继承的全局绑定）。新绑定无需另写文档；
+切换 Python、Org、cell 编辑等上下文后，显示相应实际可用的 leader 键。
+可按按键、命令名、说明筛选；=RET= 只显示所选提示并关闭，不执行命令，=C-g= 取消。
+不新开正文窗口或 Cheatsheet buffer；浮窗内部仍由 Vertico/posframe 管理隐藏显示 buffer。
+
+#+begin_src emacs-lisp
+(defun my/key-help-resolve (binding)
+  "Resolve Meow forwarding commands using the current buffer's keymaps."
+  (let (seen)
+    (while (and (symbolp binding) (get binding 'meow-dispatch)
+                (not (memq binding seen)))
+      (push binding seen)
+      (setq binding (or (key-binding (kbd (get binding 'meow-dispatch)) t) binding))))
+  binding)
+
+(defun my/key-help-walk (root section &optional prefix effective)
+  "Read live ROOT bindings, including inherited prefixes, with no static key list.
+SECTION and PREFIX label rows. EFFECTIVE resolves active normal-mode overrides."
+  (let ((rows nil) (seen-keys (make-hash-table :test #'equal)))
+    (cl-labels
+        ((walk (map keys ancestors)
+           (when (and (keymapp map) (< (length keys) 10) (not (memq map ancestors)))
+             (let ((events nil))
+               ;; map-keymap can visit shadowed parent entries too. Lookup each
+               ;; event against MAP again so only its effective binding wins.
+               (map-keymap (lambda (event _definition) (cl-pushnew event events :test #'equal)) map)
+               (dolist (event events)
+                 (unless (or (consp event) (memq event '(remap menu-bar tool-bar t)))
+                   (let* ((sequence (vconcat keys (vector event)))
+                          (binding (my/key-help-resolve (lookup-key map (vector event) t))))
+                     (cond
+                      ((keymapp binding) (walk binding sequence (cons map ancestors)))
+                      ((commandp binding)
+                       (when (and effective (bound-and-true-p meow-normal-mode))
+                         (setq binding (my/key-help-resolve (or (key-binding sequence t) binding))))
+                       (when (commandp binding)
+                         (let* ((key (concat prefix (key-description sequence)))
+                                (name (if (symbolp binding) (symbol-name binding) "keyboard-macro"))
+                                (doc (condition-case nil (documentation binding t) (error nil)))
+                                (summary (if (stringp doc)
+                                             (replace-regexp-in-string
+                                              "[ \t]+" " " (car (split-string doc "\n"))) "")))
+                           (unless (gethash key seen-keys)
+                             (puthash key t seen-keys)
+                             (push (list :key key :command binding :section section
+                                         :summary summary
+                                         :candidate (format "%-16s  %-38s  %s" key name summary)) rows)))))))))))))
+      (walk root [] nil))
+    (sort rows (lambda (a b) (string-lessp (plist-get a :key) (plist-get b :key))))))
+
+(defun my/keybinding-help-entries ()
+  "Collect current Meow normal keys and contextual SPC bindings on demand."
+  (require 'meow)
+  (let* ((leader (if (stringp meow-keypad-leader-dispatch)
+                     (key-binding (kbd meow-keypad-leader-dispatch) t)
+                   (meow--get-leader-keymap)))
+         (normal (alist-get 'normal meow-keymap-alist)))
+    (append (my/key-help-walk normal "Meow · 普通模式" nil t)
+            (my/key-help-walk leader (format "SPC · %s" major-mode) "SPC "))))
+
+(defun my/keybinding-cheatsheet ()
+  "Search a live key reference in the centered completion popup; never execute it."
+  (interactive)
+  (require 'vertico-posframe)
+  (require 'vertico-multiform)
+  (let* ((entries (my/keybinding-help-entries))
+         (index (mapcar (lambda (entry) (cons (plist-get entry :candidate) entry)) entries))
+         (candidates (mapcar #'car index))
+         (this-command 'my/keybinding-cheatsheet)
+         ;; This reference is always centered in GUI, even when the general
+         ;; floating-completion toggle is off; TTY retains Vertico's fallback.
+         (vertico-multiform-commands
+          (cons '(my/keybinding-cheatsheet posframe) vertico-multiform-commands))
+         (vertico-count (min 20 (max 8 (- (frame-height) 12))))
+         (vertico-posframe-width (max 35 (min 120 (- (frame-width) 8))))
+         (vertico-posframe-min-width 35)
+         (table (lambda (input predicate action)
+                  (if (eq action 'metadata)
+                      `(metadata
+                        (category . my-keybindings)
+                        (display-sort-function . identity)
+                        (cycle-sort-function . identity)
+                        (group-function . ,(lambda (candidate transform)
+                                             (if transform candidate
+                                               (plist-get (cdr (assoc candidate index)) :section)))))
+                    (complete-with-action action candidates input predicate))))
+         (choice (completing-read "键位速查（仅查看，RET 关闭）: " table nil t)))
+    (when-let* ((entry (cdr (assoc choice index))))
+      (message "%s → %s：%s" (plist-get entry :key)
+               (plist-get entry :command) (plist-get entry :summary)))))
 #+end_src
 
 * Emacs Rime（复用系统输入方案）
@@ -2725,6 +2821,88 @@ Mac 的 Karabiner 全配置由 Nix 管理，原设备/KikiBridge 设置在 flake
     (define-key rime-active-mode-map (kbd "C-\\") #'rime-meow-toggle)
     (define-key rime-active-mode-map (kbd "<escape>") #'rime-meow-escape)
     (my/rime-integration-mode 1))
+#+end_src
+
+* Python 临时草稿
+
+=SPC t s= / =C-c t s= 共用一个命令：notebook 的 Python cell 编辑窗口中复制
+整个 buffer（包含尚未写回的修改）到独立临时文件，其余位置新建空白 Python 文件。
+不改动、不写回、不执行原 cell；不使用剪贴板。Unix 使用 =/tmp= 下本次 Emacs
+会话的独立私有目录，Windows 使用系统临时目录下的独立目录，避免 LSP 扫描整个临时目录。
+文件名包含时间戳和随机后缀，保留到手动删除或系统清理。
+草稿共享该小目录的语言服务，只诊断打开的文件；异常退出不循环重连，最后一个草稿
+关闭后自动退出。设置在 Python mode hooks 启动 Eglot 之前生效。
+
+#+begin_src emacs-lisp
+(defvar my/python-scratch-root nil
+  "Private temporary workspace for this Emacs session's Python scratch files.")
+
+(defun my/python-scratch-directory ()
+  "Return a small private workspace, never the entire system temporary root."
+  (unless (and my/python-scratch-root (file-directory-p my/python-scratch-root))
+    (setq my/python-scratch-root
+          (file-name-as-directory
+           (make-temp-file
+            (expand-file-name (format "emacs-python-scratch-%s-" (user-uid))
+                              (if (eq system-type 'windows-nt) temporary-file-directory "/tmp/"))
+            t))))
+  my/python-scratch-root)
+
+(defun my/python-scratch-project (directory)
+  "Keep scratch LSP roots inside their dedicated directory, including reopened files."
+  (let ((root (file-name-as-directory (expand-file-name directory))))
+    (when (string-match-p "\\`emacs-python-scratch-[0-9]+-[[:alnum:]]+\\'"
+                          (file-name-nondirectory (directory-file-name root)))
+      (cons 'transient (file-name-as-directory (file-truename root))))))
+
+(defun my/python-scratch-setup ()
+  "Configure scratch LSP lifecycle before `eglot-ensure' can start a server."
+  (when (and buffer-file-name
+             (string-prefix-p "python-scratch-" (file-name-nondirectory buffer-file-name))
+             (my/python-scratch-project (file-name-directory buffer-file-name)))
+    (setq-local doom-modeline-buffer-file-name-style 'file-name
+                eglot-autoshutdown t
+                eglot-autoreconnect nil
+                eglot-workspace-configuration
+                '(:basedpyright (:analysis (:diagnosticMode "openFilesOnly"))))))
+
+(defun my/python-eglot-ensure ()
+  "Start Python LSP, except for legacy scratch files directly in the temp root."
+  (unless (and buffer-file-name
+               (string-prefix-p "python-scratch-" (file-name-nondirectory buffer-file-name))
+               (file-equal-p (file-name-directory buffer-file-name)
+                             (if (eq system-type 'windows-nt) temporary-file-directory "/tmp/")))
+    (eglot-ensure)))
+
+(require 'project)
+(add-hook 'project-find-functions #'my/python-scratch-project)
+(add-hook 'python-mode-hook #'my/python-scratch-setup -90)
+(add-hook 'python-ts-mode-hook #'my/python-scratch-setup -90)
+
+(defun my/python-scratch ()
+  "Open an independent temporary Python file, copying a notebook cell if editing one."
+  (interactive)
+  (let* ((copy-cell (and (bound-and-true-p my/org-notebook-cell-edit-mode)
+                         (derived-mode-p 'python-mode 'python-ts-mode)
+                         (org-src-edit-buffer-p)))
+         (contents (and copy-cell
+                        (save-restriction
+                          (widen)
+                          (buffer-substring-no-properties (point-min) (point-max)))))
+         (directory (my/python-scratch-directory))
+         (file (make-temp-file
+                (expand-file-name (format-time-string "python-scratch-%Y%m%d-%H%M%S-") directory)
+                nil ".py")))
+    (when contents
+      (let ((coding-system-for-write 'utf-8-unix))
+        (write-region contents nil file nil 'silent)))
+    (find-file file)
+    (goto-char (point-min))
+    (message "%s：%s" (if copy-cell "已复制 cell 到独立草稿" "已新建 Python 草稿")
+             (file-name-nondirectory file))
+    file))
+
+(global-set-key (kbd "C-c t s") #'my/python-scratch)
 #+end_src
 
 * 编程语言支持
@@ -3762,8 +3940,8 @@ Always prompt if multiple scripts exist, regardless of point.  q returns
 
   (use-package eglot
     :ensure nil
-    :hook ((python-mode . eglot-ensure)
-           (python-ts-mode . eglot-ensure))
+    :hook ((python-mode . my/python-eglot-ensure)
+           (python-ts-mode . my/python-eglot-ensure))
     :config
     (add-to-list 'eglot-server-programs
                  '((python-mode python-ts-mode)
