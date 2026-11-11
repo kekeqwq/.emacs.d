@@ -58,21 +58,26 @@ HTML/Python 中仍显示名称、语法节点类型、起始行列和可用字�
 结构视图是文本列表，不是点击即可跳转的交互大纲。由 HTML 内嵌 JSON
 阅读视图进入结构视图时，导出位置仍跟随原 HTML 文件。
 
-** HTML / JSON：全文格式化与内嵌 JSON
+** 统一全文格式化与 HTML 内嵌 JSON
 
 | 适用范围 | 普通模式 | 插入模式 | 功能 |
 |----------+----------+----------+------|
-| HTML / JSON | =SPC f f= | =C-c f f= | 使用 Prettier 格式化全文 |
+| 所有编程 / 配置语言 | =SPC f f= | =C-c f f= | 专用格式化器 → 支持格式化的 Eglot → mode 原生缩进 |
+| Bash / Shell | =SPC f f= | =C-c f f= | 使用 shfmt 格式化全文 |
+| HTML / JSON / JS / TS / CSS / YAML / Markdown | =SPC f f= | =C-c f f= | 使用 Prettier 格式化全文 |
 | Python / Notebook Python 编辑窗口 | =SPC f f= | =C-c f f= | 使用 Ruff 格式化全文 / 当前编辑单元，不执行或保存 |
 | 仅 HTML | =SPC j j= | =C-c j j= | 当前窗口打开内嵌 JSON 的独立只读阅读视图 |
 
-- 格式化在后台处理全文，即使存在选区或 narrowing；不自动保存，支持撤销，失败保留原文。
+- 专用格式化器在后台处理全文，即使存在选区或 narrowing；不自动保存，支持撤销，失败保留原文。
   期间若编辑了缓冲区，结果不会覆盖新编辑，需重新执行；再次调用会取消旧任务并重跑。
   可用 =M-x my/web-format-cancel= 取消，失败详情在 =*Prettier errors*=。
 - 大于 256 KiB 或有超过 4000 字符长行的 HTML/JSON 使用轻量显示：关闭缩进线、
   彩虹括号及 Combobulate 额外高亮，长行横向滚动，保留原文、基础语法色和结构导航。
   格式化不再无限时逐字符 diff，也不强制全文件立即高亮。阈值见 =my/web-large-buffer-threshold=。
-- 依赖 PATH 中的 =prettier= / =ruff=：Nix 系统由 flakes 安装，Windows 需手动安装。
+- =prettier= / =ruff= / =shfmt= / =stylua= / =nixfmt= / =typstyle= 由 flakes 安装，Windows 放入 PATH。
+  还会识别已安装的 =fish_indent= / =gofmt= / =rustfmt= / =clang-format= / =taplo=。
+  没有专用工具时尝试 Eglot 的全文格式化能力，否则在编程 / 配置 mode 中执行原生缩进，
+  并明确提示“native indentation only”，不把缩进冒充完整格式化。普通 Org 不改动。
 - Python 仅运行 =ruff format=，不整理导入、不做 lint 修复；遵循项目 Ruff 配置和标准格式
   （例如调用中的关键字参数变为 =name=value=）。Notebook 只格式化 Python 编辑窗口，
   不修改普通 Org；退出编辑窗口时按原有机制回写。Ruff 错误见 =*Ruff errors*=。
@@ -2257,6 +2262,8 @@ macOS 上 =y= 复制到系统剪贴板，可在其它应用用 =⌘V= 粘贴；�
      '("t a" . my/toggle-frame-transparency)
      '("t v" . my/completion-toggle-posframe)
      '("t s" . my/python-scratch)
+     '("f f" . my/format-buffer)
+     '("f C-f" . my/format-buffer)
      '("/" . meow-keypad-describe-key)
      '("?" . my/keybinding-cheatsheet))
 
@@ -2968,7 +2975,7 @@ Windows 需手动安装并放入 PATH。
     :mode "\\.typ\\'")
 
   (defvar-local my/web-format-process nil
-    "Current asynchronous Prettier/Ruff job for this buffer.")
+    "Current asynchronous formatter job for this buffer.")
 
   (defun my/web-format-label (process)
     (or (process-get process 'my/formatter-label) "Prettier"))
@@ -3027,24 +3034,83 @@ Windows 需手动安装并放入 PATH。
           (dolist (buffer (list output errors))
             (when (buffer-live-p buffer) (kill-buffer buffer)))))))
 
-  (defun my/web-format-buffer ()
-    "Format HTML/JSON with Prettier or Python with Ruff, without saving."
+  (defun my/format-command ()
+    "Return (LABEL TOOL ARGS...) for this language, or nil.
+Project configuration is left to each formatter. Never run a shell or source file."
+    (let* ((file (or buffer-file-name (expand-file-name "untitled.py")))
+           (parser (cond
+                    ((derived-mode-p 'html-mode 'html-ts-mode 'mhtml-mode) "html")
+                    ((derived-mode-p 'json-mode 'json-ts-mode 'jsonc-mode 'jsonc-ts-mode) "json")
+                    ((derived-mode-p 'tsx-ts-mode) "typescript")
+                    ((derived-mode-p 'typescript-mode 'typescript-ts-mode) "typescript")
+                    ((derived-mode-p 'js-mode 'js-ts-mode 'js2-mode 'js-jsx-mode) "babel")
+                    ((derived-mode-p 'rasi-mode) nil)
+                    ((derived-mode-p 'scss-mode 'scss-ts-mode) "scss")
+                    ((derived-mode-p 'less-css-mode) "less")
+                    ((derived-mode-p 'css-mode 'css-ts-mode) "css")
+                    ((derived-mode-p 'yaml-mode 'yaml-ts-mode) "yaml")
+                    ((derived-mode-p 'markdown-mode 'gfm-mode 'markdown-ts-mode) "markdown")
+                    ((derived-mode-p 'graphql-mode 'graphql-ts-mode) "graphql"))))
+      (cond
+       ((derived-mode-p 'python-mode 'python-ts-mode)
+        (list "Ruff" "ruff" "format" "--stdin-filename" file "-"))
+       ((or (derived-mode-p 'bash-ts-mode)
+            (and (derived-mode-p 'sh-mode)
+                 (memq sh-shell '(sh bash dash ash bsh ksh mksh))))
+        (list "shfmt" "shfmt" "-filename"
+              (or buffer-file-name (expand-file-name "untitled.sh"))))
+       ((or (derived-mode-p 'fish-mode)
+            (and (derived-mode-p 'sh-mode) (eq sh-shell 'fish)))
+        '("fish_indent" "fish_indent"))
+       ((derived-mode-p 'nix-mode 'nix-ts-mode) '("nixfmt" "nixfmt"))
+       ((derived-mode-p 'lua-mode 'lua-ts-mode)
+        (list "StyLua" "stylua" "--stdin-filepath" (or buffer-file-name "untitled.lua") "-"))
+       ((derived-mode-p 'typst-mode 'typst-ts-mode) '("typstyle" "typstyle"))
+       ((derived-mode-p 'go-mode 'go-ts-mode) '("gofmt" "gofmt"))
+       ((derived-mode-p 'rust-mode 'rust-ts-mode) '("rustfmt" "rustfmt" "--emit" "stdout"))
+       ((derived-mode-p 'c-mode 'c-ts-mode 'c++-mode 'c++-ts-mode 'java-mode 'java-ts-mode)
+        (list "clang-format" "clang-format" (concat "--assume-filename="
+               (or buffer-file-name (if (derived-mode-p 'java-mode 'java-ts-mode) "untitled.java" "untitled.cc")))))
+       ((derived-mode-p 'toml-mode 'toml-ts-mode) '("Taplo" "taplo" "format" "-"))
+       (parser (list "Prettier" "prettier" "--parser" parser "--stdin-filepath"
+                     (or buffer-file-name (expand-file-name (concat "untitled." parser))))))))
+
+  (defun my/format-buffer ()
+    "Format the entire buffer without saving, regardless of selection/narrowing.
+Prefer the language formatter, then capable Eglot, then native mode indentation.
+The last fallback only changes indentation and explicitly reports that fact."
     (interactive)
     (barf-if-buffer-read-only)
-    (let* ((parser (cond ((derived-mode-p 'html-ts-mode) "html")
-                         ((derived-mode-p 'json-ts-mode) "json")
-                         ((derived-mode-p 'python-mode 'python-ts-mode) "python")
-                         (t (user-error "Use this command in an HTML, JSON or Python buffer"))))
-           (python (equal parser "python"))
-           (tool (if python "ruff" "prettier"))
-           (label (if python "Ruff" "Prettier"))
-           (program (or (executable-find tool)
-                        (user-error "%s is not on PATH; install it via flakes (Windows: install manually)" label)))
-           (filename (or buffer-file-name (expand-file-name (concat "untitled." (if python "py" parser)))))
+    (let ((command (my/format-command)))
+      (cond
+       ((and command (executable-find (cadr command))) (my/format-run command))
+       ((and (bound-and-true-p eglot--managed-mode)
+             (eglot--server-capable :documentFormattingProvider))
+        (my/web-format-cancel)
+        (save-restriction (widen) (call-interactively #'eglot-format-buffer)))
+       ((or command (derived-mode-p 'prog-mode 'conf-mode 'tex-mode 'TeX-mode 'latex-mode 'LaTeX-mode))
+        (my/web-format-cancel)
+        (save-excursion
+          (save-restriction
+            (widen)
+            (atomic-change-group (indent-region (point-min) (point-max)))))
+        (message "%s: native indentation only%s (not saved)" major-mode
+                 (if command (format "; %s is not on PATH" (cadr command)) "")))
+       (t (user-error "No formatter for %s%s" major-mode
+                      (if command (format "; install %s via flakes or PATH" (cadr command)) ""))))))
+
+  (global-set-key (kbd "C-c f f") #'my/format-buffer)
+
+  (defun my/format-run (command)
+    "Run asynchronous formatter COMMAND without saving or executing source."
+    (barf-if-buffer-read-only)
+    (let* ((label (car command))
+           (tool (cadr command))
+           (program (or (executable-find tool) (user-error "%s is not on PATH" tool)))
            (source (current-buffer))
            (tick (buffer-chars-modified-tick))
-           (output (generate-new-buffer " *prettier-output*"))
-           (errors (generate-new-buffer " *prettier-stderr*"))
+           (output (generate-new-buffer " *formatter-output*"))
+           (errors (generate-new-buffer " *formatter-stderr*"))
            process)
       (my/web-format-cancel)
       (condition-case err
@@ -3053,8 +3119,7 @@ Windows 需手动安装并放入 PATH。
                   (make-process
                    :name tool :buffer output :stderr errors :noquery t
                    :connection-type 'pipe :coding '(utf-8-unix . utf-8-unix)
-                   :command (if python (list program "format" "--stdin-filename" filename "-")
-                              (list program "--parser" parser "--stdin-filepath" filename))
+                   :command (cons program (cddr command))
                    :sentinel (apply-partially #'my/web-format-finished source tick output errors)))
             (setq my/web-format-process process)
             (process-put process 'my/formatter-label label)
@@ -3073,11 +3138,14 @@ Windows 需手动安装并放入 PATH。
            (when (buffer-live-p buffer) (kill-buffer buffer)))
          (signal (car err) (cdr err))))))
 
+  ;; Compatibility for existing local maps and already-open buffers.
+  (defalias 'my/web-format-buffer #'my/format-buffer)
+
   (defun my/python-format-buffer ()
     "Format this Python buffer/cell with Ruff, without saving or executing."
     (interactive)
     (unless (derived-mode-p 'python-mode 'python-ts-mode) (user-error "Not a Python buffer"))
-    (my/web-format-buffer))
+    (my/format-buffer))
 
   ;;; HTML: use the existing automatic tree-sitter grammar installation.
   (use-package html-ts-mode
@@ -3893,7 +3961,7 @@ Always prompt if multiple scripts exist, regardless of point.  q returns
       (my/combobulate-display-structure (my/combobulate-ancestor-text) "Ancestors")))
 
   (defun my/combobulate-meow-setup ()
-    "Add local structural keys and HTML/JSON/Python formatting."
+    "Add local structural keys, inheriting the universal formatter binding."
     (let ((leader (make-sparse-keymap))
           (structure-map (make-sparse-keymap)))
       (set-keymap-parent leader (meow--get-leader-keymap))
@@ -3904,12 +3972,6 @@ Always prompt if multiple scripts exist, regardless of point.  q returns
       (define-key structure-map (kbd "p") #'my/combobulate-show-ancestors)
       (define-key structure-map (kbd "C-p") #'my/combobulate-show-ancestors)
       (define-key leader (kbd "s") structure-map)
-      (when (derived-mode-p 'html-ts-mode 'json-ts-mode 'python-mode 'python-ts-mode)
-        (let ((format-map (make-sparse-keymap))
-              (formatter (if (derived-mode-p 'python-mode 'python-ts-mode) #'my/python-format-buffer #'my/web-format-buffer)))
-          (define-key format-map (kbd "f") formatter)
-          (define-key format-map (kbd "C-f") formatter)
-          (define-key leader (kbd "f") format-map)))
       (setq-local meow-keypad-leader-dispatch leader)))
 
   (with-eval-after-load 'meow
