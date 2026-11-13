@@ -284,10 +284,18 @@ Elpaca 实际是从 GitHub 镜像 clone 包，元数据只影响菜单里的描�
 把 =elpaca-menu-elpa--metadata= 覆盖为直接返回 nil，不再访问这两个主机；
 装包不受影响（=:tar= 仅用于 tar 型拉取，此处默认 git）。
 
+还有部分 GNU ELPA 包的 recipe 把 =:url= 直接指到 =git.savannah.gnu.org=
+（如 AUCTeX），Savannah 同样不可达。把该域名加入
+=elpaca-menu-elpa-ignored-url-regexp=，这些包就回退到 Elpaca 的
+GitHub 镜像（=emacsmirror/gnu_elpa= 的 =externals/<包名>= 分支）。
+
 两个覆盖都必须用 =with-eval-after-load=：这些函数来自 autoload，若在加载
 前直接 =defun=，文件被 autoload 载入时会把覆盖回退成原实现。
 
 #+begin_src emacs-lisp
+(setq elpaca-menu-elpa-ignored-url-regexp
+      "\\(?:bzr::\\|hg::\\|dr-qubit\\|git\\.savannah\\.gnu\\.org\\)")
+
 (with-eval-after-load 'elpaca-menu-melpa
   (defun elpaca-menu-melpa--clone (path)
     "Clone MELPA recipes repo to PATH (main branch)."
