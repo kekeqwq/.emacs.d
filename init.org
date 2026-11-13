@@ -272,6 +272,39 @@ Elpaca 本身。
 (elpaca `(,@elpaca-order))
 #+end_src
 
+MELPA 已把默认分支从 =master= 改为 =main=，而 Elpaca 0.2.0 的
+=elpaca-menu-melpa--clone= 仍硬编码 =master=，全新 clone 会报
+=couldn't find remote ref master=（之后残留空 cache 又表现为
+=file-missing ... elpaca/cache/melpa/recipes=）。在队列处理前覆盖该函数，
+改用 =main=；不依赖手动预置 cache，跨平台一致。
+
+#+begin_src emacs-lisp
+(defun elpaca-menu-melpa--clone (path)
+  "Clone MELPA recipes repo to PATH (main branch)."
+  (let ((default-directory path))
+    (make-directory path t)
+    (make-directory (expand-file-name ".git/info/" path) t)
+    (message "Downloading MELPA recipes...")
+    (let* ((process-environment (append '("GIT_CONFIG_SYSTEM=/dev/null"
+                                          "GIT_CONFIG_GLOBAL=/dev/null")
+                                        process-environment))
+           (processes
+            (list
+             (elpaca-process-call "git" "init")
+             (elpaca-process-call "git" "config" "core.sparseCheckout" "true")
+             (with-temp-buffer
+               (insert "recipes")
+               (append-to-file (point-min) (point-max)
+                               (expand-file-name ".git/info/sparse-checkout" path)))
+             (elpaca-process-call "git" "remote" "add" "origin" "https://github.com/melpa/melpa.git")
+             (elpaca-process-call "git" "pull" "--depth=1" "origin" "main")
+             (elpaca-process-call "git" "checkout" "main")
+             (elpaca-process-call "git" "branch" "--set-upstream-to" "origin/main" "main")))
+           (err (car (cl-remove-if #'zerop (delq nil processes) :key #'car))))
+      (when err (error "Unable to clone MELPA: %S" err))
+      (message "Downloading MELPA recipes...100%%"))))
+#+end_src
+
 ** use-package 集成
 
 让 =use-package= 默认使用 =:ensure t=，并启用 Elpaca 作为 use-package 的后端。
