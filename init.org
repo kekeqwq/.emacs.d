@@ -382,22 +382,33 @@ description/version, so returning nil is safe."
 
 ** Tree-sitter
 
-Emacs 31 把过去要靠 =treesit-auto= / 手写 =treesit-language-source-alist=
-才能做的事收进了核心：
+Emacs 31 把过去要靠 =treesit-auto= 才能做的事收进了核心：
 
 - =treesit-enabled-modes= 为 =t= 时，有 tree-sitter 变体的 major mode
   会自动切到 =*-ts-mode=（通过 =treesit-major-mode-remap-alist=）。
 - =treesit-auto-install-grammar= 为 ='always= 时，缺语法库就直接编译安装，
   不再弹错退出。安装目录优先用 =treesit-extra-load-path= 里第一个可写目录。
 
-原先依赖 casouri/tree-sitter-module 预编译 .so 的路径仍然保留，已有的
-grammar 会继续被找到；没有的会由 Emacs 自己装到该目录或
-=~/.emacs.d/tree-sitter/=。
+自动安装需要 =treesit-language-source-alist= 提供语法库仓库地址（Emacs 默认
+为空），这里列出本配置实际用到的语言；缺失时由 Emacs 用 gcc 编译到
+=~/.emacs.d/tree-sitter/=。markdown 与 markdown-inline 来自同一仓库，
+用 =:source-dir= 区分。已有的预编译 .dylib/.so 仍会被优先找到。
 
 #+begin_src emacs-lisp
 (setq treesit-extra-load-path '("~/Repos/tree-sitter-module/dist/"))
 (setq treesit-auto-install-grammar 'always)
 (setq treesit-enabled-modes t)
+(setq treesit-language-source-alist
+      '((bash "https://github.com/tree-sitter/tree-sitter-bash")
+        (python "https://github.com/tree-sitter/tree-sitter-python")
+        (html "https://github.com/tree-sitter/tree-sitter-html")
+        (json "https://github.com/tree-sitter/tree-sitter-json")
+        (lua "https://github.com/tree-sitter-grammars/tree-sitter-lua")
+        (kdl "https://github.com/tree-sitter-grammars/tree-sitter-kdl")
+        (markdown "https://github.com/tree-sitter-grammars/tree-sitter-markdown"
+                  :source-dir "tree-sitter-markdown/src")
+        (markdown-inline "https://github.com/tree-sitter-grammars/tree-sitter-markdown"
+                         :source-dir "tree-sitter-markdown-inline/src")))
 #+end_src
 
 * 快捷键绑定
