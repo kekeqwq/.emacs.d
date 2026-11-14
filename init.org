@@ -2831,8 +2831,14 @@ Mac 的 Karabiner 全配置由 Nix 管理，原设备/KikiBridge 设置在 flake
     (defun my/rime-font-name ()
       (let* ((base (ignore-errors (face-attribute 'default :font)))
              (size (and base (font-get base :size)))
-             (pixels (if (and (numberp size) (> size 0) (<= size 48)) size 16)))
-        (format "LXGW WenKai Mono-%d" pixels)))
+             ;; On Linux font-get :size is in pixels, but a font name's
+             ;; numeric suffix is in points. Reusing pixels as points scales
+             ;; the candidate font up a second time under GTK/HiDPI.
+             ;; default :height is already in tenths of a point.
+             (points (if (eq system-type 'gnu/linux)
+                         (/ (face-attribute 'default :height nil t) 10.0)
+                       (if (and (numberp size) (> size 0) (<= size 48)) size 16))))
+        (format "LXGW WenKai Mono-%s" points)))
     (defvar my/rime--styling nil)
     (defun my/rime-sync-theme (&rest _)
       "Keep candidate faces and the existing child frame on the active theme."
