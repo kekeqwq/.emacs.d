@@ -2796,6 +2796,11 @@ Mac 的 Karabiner 全配置由 Nix 管理，原设备/KikiBridge 设置在 flake
       :global t :lighter nil
       :keymap (let ((map (make-sparse-keymap)))
                 (define-key map (kbd "<f13>") #'rime-meow-toggle)
+                ;; Linux XKB/GTK can name evdev F13 as XF86Tools (`Tools').
+                ;; Moonlight's virtual keyboard and physical keyboards use
+                ;; the same xremap output; accept both names, Linux only.
+                (when (eq system-type 'gnu/linux)
+                  (define-key map (kbd "<Tools>") #'rime-meow-toggle))
                 (define-key map (kbd "C-\\") #'rime-meow-toggle) map)
       (if my/rime-integration-mode
           (progn
@@ -2895,6 +2900,8 @@ Mac 的 Karabiner 全配置由 Nix 管理，原设备/KikiBridge 设置在 flake
     (advice-add 'rime-activate :before #'my/rime-before-activate)
     (advice-add 'rime-activate :after #'my/rime-after-activate)
     (define-key rime-active-mode-map (kbd "<f13>") #'rime-meow-toggle)
+    (when (eq system-type 'gnu/linux)
+      (define-key rime-active-mode-map (kbd "<Tools>") #'rime-meow-toggle))
     (define-key rime-active-mode-map (kbd "C-\\") #'rime-meow-toggle)
     (define-key rime-active-mode-map (kbd "<escape>") #'rime-meow-escape)
     (my/rime-integration-mode 1))
