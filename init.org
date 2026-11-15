@@ -4167,8 +4167,20 @@ Always prompt if multiple scripts exist, regardless of point.  q returns
                (not (one-window-p t (window-frame my/python-output-window))))
       (delete-window my/python-output-window)))
 
+  (defcustom my/python-output-side-by-side-min-width 160
+    "Minimum source-window width in columns for right-side Python output.
+Narrower windows put output below, leaving both panes readable."
+    :type 'integer :group 'python)
+
+  (defun my/python-output-split-window ()
+    "Split the source window right when wide enough, otherwise below."
+    (if (>= (window-total-width)
+            (max my/python-output-side-by-side-min-width (* 2 window-min-width)))
+        (split-window-right)
+      (split-window-below)))
+
   (defun my/python-run-ghostel ()
-    "Save and run the current Python file in a new Ghostel window on the right.
+    "Save and run Python in a new Ghostel window: right when wide, below when narrow.
   Select the output window.  C-c stops the session and closes its window.
   Keep output after Python exits until explicitly closed.
   Honor `python-shell-virtualenv-root' and Python's process environment."
@@ -4187,7 +4199,7 @@ Always prompt if multiple scripts exist, regardless of point.  q returns
        (let ((python (executable-find python-shell-interpreter)))
          (unless python
            (user-error "Python interpreter not found: %s" python-shell-interpreter))
-         (let ((window (split-window-right))
+         (let ((window (my/python-output-split-window))
                (output (generate-new-buffer
                         (format "*Python: %s*" (file-name-nondirectory file)))))
            (condition-case err
