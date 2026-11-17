@@ -888,7 +888,7 @@ Cape 提供额外的 =completion-at-point= 后端函数，如 dabbrev（动态�
 ;; GUI 窗口按像素缩放，不再以整行/整列为步长，避免贴边时留下空隙。
 (setq frame-resize-pixelwise t)
 
-(defconst my/cjk-font-family "LXGW WenKai Mono"
+(defconst my/cjk-font-family "仓耳今楷05 W03"
   "Chinese font used throughout Emacs; Latin keeps MonoLisa Nasy.")
 
 (defun my/setup-global-cjk-font (&optional frame-or-theme)
@@ -1327,8 +1327,8 @@ Only touch headings in the invalidated fontification region; no scroll hooks."
 
 * Org 中文字体与表格对齐
 
-Org 中文使用 =LXGW WenKai Mono=（霞鹜文楷等宽版），英文始终保留原字体。
-字体由 Emacs 全局统一设置：英文 MonoLisa Nasy、中文 LXGW WenKai Mono，
+Org 中文使用 =仓耳今楷05 W03=，英文始终保留原字体。
+字体由 Emacs 全局统一设置：英文 MonoLisa Nasy、中文仓耳今楷05，
 不改变字号、配色与代码块样式。表格由 =valign= 按实际像素对齐，
 用显示间距补齐列宽，不改写表格文本。仅表格的竖线由 valign 绘制，
 Org Modern 其他美化继续保留。TTY 的实际字形仍由终端字体设置决定。
@@ -2938,8 +2938,8 @@ Mac 的 Karabiner 全配置由 Nix 管理，原设备/KikiBridge 设置在 flake
                                               (internal-border-color . ,border)))
             (dolist (face '(internal-border child-frame-border))
               (when (facep face) (set-face-background face border frame)))))))
-    (defun my/rime-use-wenkai (frame)
-      "Use WenKai for Chinese and explicit emoji/symbol fallback on FRAME."
+    (defun my/rime-use-cjk (frame)
+      "Use JinKai for Chinese and explicit emoji/symbol fallback on FRAME."
       (when (frame-live-p frame)
         (my/setup-global-cjk-font frame)
         (let* ((families (font-family-list frame))
@@ -2969,7 +2969,7 @@ Mac 的 Karabiner 全配置由 Nix 管理，原设备/KikiBridge 设置在 flake
           (let* ((buffer (get-buffer rime-posframe-buffer))
                  (frame (and buffer (buffer-local-value 'posframe--frame buffer))))
             (when (frame-live-p frame)
-              (my/rime-use-wenkai frame)
+              (my/rime-use-cjk frame)
               (redraw-frame frame))))))
     (advice-add 'rime--posframe-display-content :around #'my/rime-style-candidates)
     (add-to-list 'rime-disable-predicates #'my/rime--ascii-only)
