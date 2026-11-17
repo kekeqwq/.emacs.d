@@ -26,16 +26,6 @@
     (setf (alist-get 'font (symbol-value alist))
           (format "%s-%d" font size))))
 
-;; 英文仍用 MonoLisa Nasy；仅 Windows GUI 把汉字落到微软雅黑。
-(when (eq system-type 'windows-nt)
-  (defun my/windows-cjk-font (&optional frame)
-    (let ((frame (or frame (selected-frame))))
-      (when (display-graphic-p frame)
-        (dolist (charset '(han cjk-misc))
-          (set-fontset-font t charset "Microsoft YaHei" frame)))))
-  (add-hook 'after-make-frame-functions #'my/windows-cjk-font)
-  (add-hook 'window-setup-hook #'my/windows-cjk-font))
-
 ;; Windows emacs -nw：w32console 会设成 OEM（常为 cp936），
 ;; ▶ / … 等编不进去就会显示成 \u25B6。TTY 改为 UTF-8。
 ;; 只取消 default 底色：16 色下 bg_normal 越界则不发背景 SGR（透出终端），

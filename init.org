@@ -220,6 +220,28 @@ A4 自动分页，长行会换行。若想导出完整内容，先自行展开�
 ;;; init.el --- tangled from init.org -*- lexical-binding: t; -*-
 #+end_src
 
+* ECA 编程助手
+
+Elpaca 安装 =eca-emacs=；flakes 的共享 desktop 层安装固定版本 ECA 后端，
+明确调用 =eca server=，不允许插件另外自动下载。不会自动启动会话或发送请求。
+初次使用需在 ECA 内选择供应商并登录，或配置 API key；密钥留在本机私有配置，
+不要写入本仓库或 Nix store。聊天缓冲区输入提示后按 RET 发送。
+
+| 普通模式 | 插入模式 | 功能 |
+|----------+----------+------|
+| =SPC a a= | =C-c a a= | 启动当前项目的 ECA 聊天 |
+| =SPC a t= | =C-c a t= | 显示 / 隐藏聊天窗格 |
+| =SPC a n= | =C-c a n= | 新建聊天 |
+| =SPC a m= | =C-c a m= | 选择模型 |
+| =SPC a c= | =C-c a c= | 添加文件 / 选区作为上下文 |
+| =SPC a s= | =C-c a s= | 停止当前请求 |
+| =SPC a f= | =C-c a f= | 打开 ECA 全局配置 |
+
+不启用自动补全，不影响现有 Corfu/basedpyright。默认开启 Trust mode，自动批准
+文件修改与命令执行；仍遵守服务端 deny 规则。可在聊天中运行
+=M-x eca-chat-toggle-trust= 临时关闭。私有全局配置的 =chat.defaultTrust=true=
+让新聊天的服务端同样默认信任，密钥 / 登录信息不放入此仓库。
+
 * 包管理器 (Elpaca)
 
 Elpaca 是一个现代化的 Emacs 包管理器，支持异步安装、懒加载和从 Git 仓库
@@ -850,6 +872,21 @@ Cape 提供额外的 =completion-at-point= 后端函数，如 dabbrev（动态�
 ;; GUI 窗口按像素缩放，不再以整行/整列为步长，避免贴边时留下空隙。
 (setq frame-resize-pixelwise t)
 
+(defconst my/cjk-font-family "LXGW WenKai Mono"
+  "Chinese font used throughout Emacs; Latin keeps MonoLisa Nasy.")
+
+(defun my/setup-global-cjk-font (&optional frame-or-theme)
+  "Apply the shared Chinese fallback without overriding Latin or text size."
+  (dolist (frame (if (framep frame-or-theme) (list frame-or-theme) (frame-list)))
+    (when (display-graphic-p frame)
+      (dolist (characters '(han cjk-misc bopomofo (#x3000 . #x303f) (#xff00 . #xffef)))
+        (set-fontset-font t characters (font-spec :family my/cjk-font-family) frame)))))
+
+(add-hook 'after-make-frame-functions #'my/setup-global-cjk-font)
+(add-hook 'enable-theme-functions #'my/setup-global-cjk-font t)
+(add-hook 'disable-theme-functions #'my/setup-global-cjk-font t)
+(my/setup-global-cjk-font)
+
 (defun my/sync-frame-edge-faces (&optional frame-or-theme)
   "Make GUI fringes follow the default face, including new frames/themes."
   ;; FRAME=t updates defaults for frames that do not exist yet.  Do not
@@ -1047,74 +1084,11 @@ Org-modern 让 Org-mode 拥有更现代化的视觉效果：美化标题标记�
 标签、时间戳等，同时调整边框和分隔线的样式。
 
 #+begin_src emacs-lisp
-;; :fontset is supported by set-face-attribute on NAMED faces, not by
-;; anonymous face-remapping plists.  Keep it out of remapping specs.
-(defcustom my/org-cjk-font-family "LXGW WenKai Mono"
-  "Monospaced Chinese font for Org, at the existing text's pixel size."
-  :type 'string :group 'org)
-(defvar-local my/org-cjk-font-cookies nil)
-(defvar-local my/org-cjk-font-keywords nil) ; clean up any earlier trial rules
-(defvar my/org-cjk-fontsets (make-hash-table :test #'equal))
-(defface my/org-cjk-face '((t ())) "Org-only Chinese font mapping." :group 'org)
-(defface my/org-cjk-table-face '((t ())) "Org-only bilingual table font." :group 'org)
-
-(defun my/org-cjk-fontset (frame)
-  "Create a private Han fontset without changing the global fontset."
-  (require 'fontset)
-  (let* ((base (face-font 'default frame))
-         ;; Preserve the original visual size; do not enlarge Han glyphs
-         ;; to force a 2:1 ratio with MonoLisa's relatively wide Latin cells.
-         (pixels (font-get (face-attribute 'default :font frame) :size))
-         (key (list base my/org-cjk-font-family pixels)))
-    (or (gethash key my/org-cjk-fontsets)
-        (let ((set (create-fontset-from-ascii-font
-                    base nil (format "myorgsafe%d" (hash-table-count my/org-cjk-fontsets)))))
-          (dolist (characters '(han cjk-misc bopomofo (#x3000 . #x303f) (#xff00 . #xffef)))
-            (set-fontset-font set characters
-                              ;; Let heading faces scale Han along with Latin and flowers.
-                              (font-spec :family my/org-cjk-font-family)))
-          (puthash key set my/org-cjk-fontsets)))))
-(defvar my/org-cjk-font-warning-shown nil)
-
-(defun my/org-clear-cjk-font ()
-  "Remove only this feature's local font rules, including older mappings."
-  (require 'face-remap)
-  (mapc #'face-remap-remove-relative my/org-cjk-font-cookies)
-  (setq my/org-cjk-font-cookies nil)
-  (when my/org-cjk-font-keywords
-    (font-lock-remove-keywords nil my/org-cjk-font-keywords)
-    (setq my/org-cjk-font-keywords nil)))
-
-(defun my/org-setup-cjk-font ()
-  "Use named font faces in Org; leave other modes and default faces alone."
-  (interactive)
-  (when (derived-mode-p 'org-mode)
-    (my/org-clear-cjk-font)
-    (condition-case err
-        (when (display-graphic-p)
-          (if (member my/org-cjk-font-family (font-family-list))
-              (let ((fontset (my/org-cjk-fontset (selected-frame))))
-                (set-face-attribute 'my/org-cjk-face nil :fontset fontset)
-                (set-face-attribute 'my/org-cjk-table-face nil :fontset fontset
-                                    :family 'unspecified
-                                    :height 1.0 :weight 'normal :slant 'normal)
-                (push (face-remap-add-relative 'default 'my/org-cjk-face)
-                      my/org-cjk-font-cookies)
-                (push (face-remap-add-relative 'org-table 'my/org-cjk-table-face)
-                      my/org-cjk-font-cookies))
-            (unless my/org-cjk-font-warning-shown
-              (setq my/org-cjk-font-warning-shown t)
-              (message "Org: install %s via flakes fonts.packages" my/org-cjk-font-family))))
-      (error
-       (my/org-clear-cjk-font)
-       (message "Org CJK font skipped: %s" (error-message-string err))))
-    (when font-lock-mode (font-lock-flush))))
-
+;; Chinese fonts are configured globally; Org needs no local font remapping.
 ;; Migrate away from the previous width workaround.  Valign aligns the
 ;; displayed cells directly and never needs to rewrite Org's measuring code.
 (with-eval-after-load 'org
   (advice-remove 'org-string-width #'my/org-cjk-string-width))
-(add-hook 'org-mode-hook #'my/org-setup-cjk-font)
 
 (defun my/org-enable-pixel-tables ()
   "Align Org tables without changing font size or file contents."
@@ -1254,13 +1228,12 @@ Only touch headings in the invalidated fontification region; no scroll hooks."
 * Org 中文字体与表格对齐
 
 Org 中文使用 =LXGW WenKai Mono=（霞鹜文楷等宽版），英文始终保留原字体。
-中文保持与原文字相同的像素字号，不再为了凑两倍英文字宽而放大；英文字体、
-配色与代码块样式保持原样。使用命名 face 保存私有字体映射，重映射列表不含
-不受支持的 =:fontset= 属性。表格由 =valign= 按实际像素对齐，用显示间距补齐列宽，
-不改写表格文本。仅表格的竖线由 valign 绘制，Org Modern 其他美化继续保留。
-设置仅在 Org buffer 中生效，不改变 Python、JSON、终端等显示。
+字体由 Emacs 全局统一设置：英文 MonoLisa Nasy、中文 LXGW WenKai Mono，
+不改变字号、配色与代码块样式。表格由 =valign= 按实际像素对齐，
+用显示间距补齐列宽，不改写表格文本。仅表格的竖线由 valign 绘制，
+Org Modern 其他美化继续保留。TTY 的实际字形仍由终端字体设置决定。
 字体由 flakes 的 =fonts.packages= 安装，Windows 需手动安装同名字体。
-首次安装后重启 Emacs；已有 Org buffer 也可用 =M-x my/org-setup-cjk-font= 重设。
+字体统一由全局 =my/setup-global-cjk-font= 设置，不再使用 Org 局部字体规则。
 若原表格文本尚未对齐，把光标放入表格按 =Tab= 或 =M-x org-table-align=；
 字体设置本身不改写文件或表格内容。
 
@@ -1354,8 +1327,7 @@ PDF 使用白纸背景（不带编辑器的灰色底色），保留文字配色�
 
 (defun my/org-visible-pdf-print-css (style)
   "Keep face fonts but give CJK the same explicit mapping as the Org fontset."
-  (let* ((cjk (if (boundp 'my/org-cjk-font-family)
-                  my/org-cjk-font-family "LXGW WenKai Mono"))
+  (let* ((cjk my/cjk-font-family)
          ;; htmlfontify calls Emacs font sizes points; on this display they
          ;; are pixels. CSS pt enlarges every line by 4/3 and changes wrapping.
          (css (replace-regexp-in-string
@@ -2838,7 +2810,7 @@ Mac 的 Karabiner 全配置由 Nix 管理，原设备/KikiBridge 设置在 flake
              (points (if (eq system-type 'gnu/linux)
                          (/ (face-attribute 'default :height nil t) 10.0)
                        (if (and (numberp size) (> size 0) (<= size 48)) size 16))))
-        (format "LXGW WenKai Mono-%s" points)))
+        (format "%s-%s" (face-attribute 'default :family nil t) points)))
     (defvar my/rime--styling nil)
     (defun my/rime-sync-theme (&rest _)
       "Keep candidate faces and the existing child frame on the active theme."
@@ -2869,8 +2841,7 @@ Mac 的 Karabiner 全配置由 Nix 管理，原设备/KikiBridge 设置在 flake
     (defun my/rime-use-wenkai (frame)
       "Use WenKai for Chinese and explicit emoji/symbol fallback on FRAME."
       (when (frame-live-p frame)
-        (dolist (characters '(han kana cjk-misc bopomofo (#x3000 . #x303f) (#xff00 . #xffef)))
-          (set-fontset-font t characters (font-spec :family "LXGW WenKai Mono") frame))
+        (my/setup-global-cjk-font frame)
         (let* ((families (font-family-list frame))
                (emoji (cl-find-if (lambda (family) (member family families))
                                   '("Apple Color Emoji" "Segoe UI Emoji"
@@ -4254,8 +4225,25 @@ Narrower windows put output below, leaving both panes readable."
       :mode "\\.ahk\\'"))
 
     ;;; AI
-  ;; (use-package eca
-  ;;   :vc (:url "https://github.com/editor-code-assistant/eca-emacs" :rev :newest))
+  ;; ECA backend is pinned by flakes; never auto-download a second server.
+  ;; Manual model/provider login stays in ECA's private global config.
+  (use-package eca
+    :ensure (:repo "https://github.com/editor-code-assistant/eca-emacs.git"
+             :files ("*.el"))
+    :commands (eca eca-chat-toggle-window eca-chat-new eca-chat-select-model
+                   eca-chat-add-context-to-user-prompt eca-chat-stop-prompt
+                   eca-open-global-config)
+    :init
+    (setq eca-custom-command '("eca" "server")
+          eca-chat-trust-enable t
+          eca-chat-custom-model "openai/gpt-6.1-sol")
+    :bind (("C-c a a" . eca)
+           ("C-c a t" . eca-chat-toggle-window)
+           ("C-c a n" . eca-chat-new)
+           ("C-c a m" . eca-chat-select-model)
+           ("C-c a c" . eca-chat-add-context-to-user-prompt)
+           ("C-c a s" . eca-chat-stop-prompt)
+           ("C-c a f" . eca-open-global-config)))
 
   (if (eq system-type 'windows-nt)
       (use-package ghostel
