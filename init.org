@@ -374,6 +374,21 @@ description/version, so returning nil is safe."
 #+end_src
 
 * Emacs 本体配置
+
+** 系统服务与客户端
+
+flakes 统一启用用户级 Emacs daemon：macOS 由 launchd 登录时启动，Linux
+由 systemd 用户服务启动（linger 支持开机启动）。不以 root 运行；系统服务
+持有默认 server，桌面 Emacs App / desktop 入口用 =emacsclient -c -n= 连接，
+关闭 frame 不退出 daemon。fish 中 =e= / =e 文件名= 用 TUI 连接同一服务，
+=C-x C-c= 退出该终端连接；独立 batch/tangle 仍用 =emacs --batch=。
+macOS App 打开新 frame 后显式激活 daemon 的应用焦点，窗口管理快捷键可立即使用。
+不在 init 中重复 =server-start=，也不由客户端偷偷启动不受管理的 daemon。
+
+字体、主题、透明度等在每个 GUI client frame 创建时应用。服务更换二进制后
+需要有计划地重启 daemon；先保存 buffer，不能用 rebuild 强杀丢失编辑。
+热更新用 =emacsclient=，无需手动开启 server。重启系统不会自动恢复活动内存中的
+ECA 聊天窗口 / 未保存文件；聊天历史需通过 ECA resume 恢复。
 ** 编辑行为
 
 基本的编辑器行为设置：关闭自动保存/备份/锁文件以避免产生杂乱文件；
@@ -568,8 +583,9 @@ GUI 默认居中浮窗，颜色随主题变化；Consult 正文搜索默认底�
 
 (defvar my/completion-floating-enabled t)
 (defun my/completion-sync-theme (&rest _)
-  "Unify minibuffer and LSP completion colors without changing matching."
-  (let ((fg (face-attribute 'default :foreground nil t))
+  "Unify completion colors only from a real GUI frame, never a daemon TTY."
+  (when (display-graphic-p)
+   (let ((fg (face-attribute 'default :foreground nil t))
         (bg (face-attribute 'default :background nil t))
         (selected (face-attribute 'highlight :background nil t))
         (accent (face-attribute 'font-lock-keyword-face :foreground nil t)))
@@ -612,7 +628,7 @@ GUI 默认居中浮窗，颜色随主题变化；Consult 正文搜索默认底�
     (when (featurep 'kind-icon)
       (setq kind-icon-default-face 'corfu-default
             kind-icon-blend-background nil)
-      (kind-icon-reset-cache))))
+      (kind-icon-reset-cache)))))
 
 (defun my/completion-toggle-posframe ()
   "Toggle floating completion for subsequent minibuffer sessions."
@@ -904,11 +920,23 @@ Cape 提供额外的 =completion-at-point= 后端函数，如 dabbrev（动态�
 (add-hook 'disable-theme-functions #'my/sync-frame-edge-faces)
 (my/sync-frame-edge-faces)
 
-(when (display-graphic-p)
-  ;; 像素级平滑滚动（Emacs 29+）
-  (pixel-scroll-precision-mode 1)
-  ;; 高亮当前行
-  (global-hl-line-mode 1))
+(defun my/setup-gui-frame (&optional frame)
+  "Enable GUI facilities when a client frame appears after daemon startup."
+  (let ((frame (or frame (selected-frame))))
+    (when (display-graphic-p frame)
+      (with-selected-frame frame
+        (unless (bound-and-true-p pixel-scroll-precision-mode)
+          (pixel-scroll-precision-mode 1))
+        (unless (bound-and-true-p global-hl-line-mode)
+          (global-hl-line-mode 1))
+        ;; Buffers may have opened on a TTY before the first GUI client.
+        (when (fboundp 'my/org-enable-pixel-tables)
+          (dolist (window (window-list frame 'no-minibuf))
+            (with-current-buffer (window-buffer window)
+              (when (and (derived-mode-p 'org-mode) (not (bound-and-true-p valign-mode)))
+                (my/org-enable-pixel-tables)))))))))
+(add-hook 'after-make-frame-functions #'my/setup-gui-frame t)
+(my/setup-gui-frame)
 #+end_src
 
 ** Doom Modeline 原版
@@ -916,6 +944,8 @@ Cape 提供额外的 =completion-at-point= 后端函数，如 dabbrev（动态�
 保留 =doom-modeline= 原版布局及图标；仅关闭语言运行时版本号（如 Python 版本），
 给错误/警告计数留出空间，不重写分段或其他样式。
 图标字体 =Symbols Nerd Font Mono= 由 flakes 安装；不替换正文或 Org 字体。
+文件名按每个窗格的剩余像素宽度动态省略（尽量保留扩展名），优先给其他现有栏位
+留空间；鼠标悬停仍可查看完整路径，不更改 buffer 或文件名。
 
 #+begin_src emacs-lisp
   (use-package doom-modeline
@@ -925,7 +955,70 @@ Cape 提供额外的 =completion-at-point= 后端函数，如 dabbrev（动态�
     :config
     (line-number-mode 1)
     (column-number-mode 1)
-    (doom-modeline-mode 1))
+    (doom-modeline-mode 1)
+
+    (defun my/modeline-mark-file-name (text)
+      "Mark just the filename inside Doom's buffer-info segment."
+      (when (stringp text)
+        (let* ((name (doom-modeline--buffer-name))
+               (start (and (stringp name) (- (length text) (length name)))))
+          (when (and start (>= start 0))
+            (setq text (copy-sequence text))
+            (put-text-property start (length text) 'my/modeline-file-name t text))))
+      text)
+
+    (defun my/modeline-text-width (text)
+      "Measure TEXT in mode-line pixels (also works on TTY frames)."
+      (let ((text (copy-sequence text)))
+        (add-face-text-property 0 (length text) (doom-modeline-face) t text)
+        (doom-modeline-string-pixel-width text)))
+
+    (defun my/modeline-shorten-name (name budget)
+      "Fit NAME within BUDGET pixels; keep its extension when possible."
+      (let* ((extension (or (file-name-extension name t) ""))
+             (tail (concat "…" extension))
+             (low 0) (high (max 0 (- (length name) (length extension)))))
+        (when (> (my/modeline-text-width tail) budget) (setq tail "…"))
+        (if (> (my/modeline-text-width tail) budget) ""
+          (while (< low high)
+            (let* ((middle (/ (+ low high 1) 2))
+                   (candidate (concat (substring name 0 middle) tail)))
+              (if (<= (my/modeline-text-width candidate) budget)
+                  (setq low middle)
+                (setq high (1- middle)))))
+          (let ((short (concat (substring name 0 low) tail)))
+            (when (> (length name) 0)
+              (add-text-properties 0 (length short) (text-properties-at 0 name) short))
+            (put-text-property 0 (length short) 'help-echo
+                               (or buffer-file-name (substring-no-properties name)) short)
+            short))))
+
+    (defun my/modeline-fit-file-name (layout)
+      "Reserve space for all other displayed segments before shortening names.
+LAYOUT is Doom's original (left alignment right); no segment is reordered."
+      (if (not (= (length layout) 3)) layout
+        (let* ((left (format-mode-line (car layout)))
+               (start (text-property-any 0 (length left) 'my/modeline-file-name t left)))
+          (if (null start) layout
+            (let* ((end (next-single-property-change start 'my/modeline-file-name left (length left)))
+                   (right (format-mode-line (nth 2 layout)))
+                   (prefix (substring left 0 start))
+                   (suffix (substring left end))
+                   (name (substring left start end))
+                   (usable (- (window-pixel-width) (window-scroll-bar-width)
+                              (window-right-divider-width)
+                              (frame-char-width)))
+                   (budget (max 0 (- usable (my/modeline-text-width
+                                             (concat prefix suffix right))))))
+              (if (<= (my/modeline-text-width name) budget) layout
+                (list (string-replace "%" "%%"
+                                      (concat prefix (my/modeline-shorten-name name budget) suffix))
+                      (nth 1 layout) (nth 2 layout))))))))
+
+    (advice-add 'doom-modeline-segment--buffer-info :filter-return #'my/modeline-mark-file-name)
+    (dolist (entry doom-modeline--modelines)
+      (advice-add (intern (format "doom-modeline-format--%s" (car entry)))
+                  :filter-return #'my/modeline-fit-file-name)))
 #+end_src
 
 ** 缩进层级与彩虹括号
@@ -1059,23 +1152,30 @@ GUI 才加载的主题。tree-sitter 上色完成后补绘，忽略字符串和�
     ;; elpaca 异步安装；必须等包激活并把主题目录加入
     ;; custom-theme-load-path 后再 load-theme，否则 Windows 上
     ;; 会报 Unable to find theme file for batppuccin-latte。
-    (when (display-graphic-p)
-      (pcase system-type
-	('gnu/linux
-	 (load-theme 'batppuccin-mocha t))
-
-	('windows-nt
-	 (load-theme 'batppuccin-latte t))
-
-	('darwin
-	 (defun my/load-theme (appearance)
-	   (mapc #'disable-theme custom-enabled-themes)
-	   (pcase appearance
-	     ('light (load-theme 'batppuccin-latte t))
-	     ('dark (load-theme 'batppuccin-mocha t))))
-
-	 (add-hook 'ns-system-appearance-change-functions
-		   #'my/load-theme)))))
+    (defun my/load-theme (&optional appearance)
+      "Load the platform palette once, or when macOS appearance changes."
+      (let ((theme (if (or (eq system-type 'gnu/linux) (eq appearance 'dark))
+                       'batppuccin-mocha 'batppuccin-latte)))
+        (unless (equal custom-enabled-themes (list theme))
+          (mapc #'disable-theme custom-enabled-themes)
+          (load-theme theme t))))
+    (defun my/apply-client-frame-theme (&optional frame)
+      "Daemon startup has no GUI; defer appearance detection until a frame exists."
+      (let ((frame (or frame (selected-frame))))
+        (when (and (display-graphic-p frame) (not (frame-parent frame)))
+          (with-selected-frame frame
+            (my/load-theme
+             (when (eq system-type 'darwin)
+               (or (frame-parameter frame 'ns-appearance)
+                   (and (boundp 'ns-system-appearance) ns-system-appearance))))
+            ;; Theme may already be enabled before this GUI frame exists.
+            ;; Never retain palette values sampled from the daemon TTY.
+            (my/completion-sync-theme)
+            (when (fboundp 'my/rime-sync-theme) (my/rime-sync-theme))))))
+    (add-hook 'after-make-frame-functions #'my/apply-client-frame-theme t)
+    (when (eq system-type 'darwin)
+      (add-hook 'ns-system-appearance-change-functions #'my/load-theme))
+    (my/apply-client-frame-theme))
 #+end_src
 
 ** Org-modern (Org 美化)
@@ -2814,7 +2914,7 @@ Mac 的 Karabiner 全配置由 Nix 管理，原设备/KikiBridge 设置在 flake
     (defvar my/rime--styling nil)
     (defun my/rime-sync-theme (&rest _)
       "Keep candidate faces and the existing child frame on the active theme."
-      (when (facep 'rime-default-face)
+      (when (and (display-graphic-p) (facep 'rime-default-face))
         (let ((fg (face-attribute 'default :foreground nil t))
               (bg (face-attribute 'default :background nil t))
               (border (face-attribute 'font-lock-keyword-face :foreground nil t)))
@@ -2887,34 +2987,37 @@ Mac 的 Karabiner 全配置由 Nix 管理，原设备/KikiBridge 设置在 flake
 * Python 临时草稿
 
 =SPC t s= / =C-c t s= 共用一个命令：notebook 的 Python cell 编辑窗口中复制
-整个 buffer（包含尚未写回的修改）到独立临时文件，其余位置新建空白 Python 文件。
-不改动、不写回、不执行原 cell；不使用剪贴板。Unix 使用 =/tmp= 下本次 Emacs
-会话的独立私有目录，Windows 使用系统临时目录下的独立目录，避免 LSP 扫描整个临时目录。
-文件名包含时间戳和随机后缀，保留到手动删除或系统清理。
+整个 buffer（包含尚未写回的修改）到独立草稿文件，其余位置新建空白 Python 文件。
+不改动、不写回、不执行原 cell；不使用剪贴板。草稿存放在
+=~/.cache/emacs/python-scratch/=（优先使用 =XDG_CACHE_HOME=，Windows
+回退到 =LOCALAPPDATA=），所有草稿直接存于这一个目录，不再分会话子目录，
+LSP 的项目根也只到此目录。新文件名带随机后缀，不再放到系统临时目录；cache 仍应视为可清理数据，
+重要代码请另存到正式项目或备份。
 草稿共享该小目录的语言服务，只诊断打开的文件；异常退出不循环重连，最后一个草稿
 关闭后自动退出。设置在 Python mode hooks 启动 Eglot 之前生效。
 
 #+begin_src emacs-lisp
-(defvar my/python-scratch-root nil
-  "Private temporary workspace for this Emacs session's Python scratch files.")
+(defcustom my/python-scratch-cache-directory
+  (expand-file-name "emacs/python-scratch/"
+                    (or (getenv "XDG_CACHE_HOME")
+                        (and (eq system-type 'windows-nt) (getenv "LOCALAPPDATA"))
+                        "~/.cache/"))
+  "Single private cache directory containing all Python scratch files."
+  :type 'directory :group 'python)
 
 (defun my/python-scratch-directory ()
-  "Return a small private workspace, never the entire system temporary root."
-  (unless (and my/python-scratch-root (file-directory-p my/python-scratch-root))
-    (setq my/python-scratch-root
-          (file-name-as-directory
-           (make-temp-file
-            (expand-file-name (format "emacs-python-scratch-%s-" (user-uid))
-                              (if (eq system-type 'windows-nt) temporary-file-directory "/tmp/"))
-            t))))
-  my/python-scratch-root)
+  "Return the single private directory containing all Python scratch files."
+  (make-directory my/python-scratch-cache-directory t)
+  (set-file-modes my/python-scratch-cache-directory #o700)
+  (file-name-as-directory (file-truename my/python-scratch-cache-directory)))
 
 (defun my/python-scratch-project (directory)
   "Keep scratch LSP roots inside their dedicated directory, including reopened files."
-  (let ((root (file-name-as-directory (expand-file-name directory))))
-    (when (string-match-p "\\`emacs-python-scratch-[0-9]+-[[:alnum:]]+\\'"
-                          (file-name-nondirectory (directory-file-name root)))
-      (cons 'transient (file-name-as-directory (file-truename root))))))
+  (let ((root (file-name-as-directory (expand-file-name directory)))
+        (cache (file-name-as-directory (expand-file-name my/python-scratch-cache-directory))))
+    (when (and (file-directory-p root) (file-directory-p cache)
+               (file-equal-p root cache))
+      (cons 'transient (file-name-as-directory (file-truename cache))))))
 
 (defun my/python-scratch-setup ()
   "Configure scratch LSP lifecycle before `eglot-ensure' can start a server."
@@ -2941,7 +3044,7 @@ Mac 的 Karabiner 全配置由 Nix 管理，原设备/KikiBridge 设置在 flake
 (add-hook 'python-ts-mode-hook #'my/python-scratch-setup -90)
 
 (defun my/python-scratch ()
-  "Open an independent temporary Python file, copying a notebook cell if editing one."
+  "Open a random-named cache Python file, copying a notebook cell if editing one."
   (interactive)
   (let* ((copy-cell (and (bound-and-true-p my/org-notebook-cell-edit-mode)
                          (derived-mode-p 'python-mode 'python-ts-mode)
@@ -2952,7 +3055,7 @@ Mac 的 Karabiner 全配置由 Nix 管理，原设备/KikiBridge 设置在 flake
                           (buffer-substring-no-properties (point-min) (point-max)))))
          (directory (my/python-scratch-directory))
          (file (make-temp-file
-                (expand-file-name (format-time-string "python-scratch-%Y%m%d-%H%M%S-") directory)
+                (expand-file-name "python-scratch-" directory)
                 nil ".py")))
     (when contents
       (let ((coding-system-for-write 'utf-8-unix))
