@@ -4345,6 +4345,8 @@ Narrower windows put output below, leaving both panes readable."
     ;;; AI
   ;; ECA backend is pinned by flakes; never auto-download a second server.
   ;; Manual model/provider login stays in ECA's private global config.
+  ;; The default model is chosen by ECA config `defaultModel'; `SPC a m'
+  ;; switches models per chat, so no client-side model pin is set here.
   (use-package eca
     :ensure (:repo "https://github.com/editor-code-assistant/eca-emacs.git"
              :files ("*.el"))
@@ -4353,8 +4355,7 @@ Narrower windows put output below, leaving both panes readable."
                    eca-open-global-config)
     :init
     (setq eca-custom-command '("eca" "server")
-          eca-chat-trust-enable t
-          eca-chat-custom-model "openai/gpt-6.1-sol")
+          eca-chat-trust-enable t)
     :bind (("C-c a a" . eca)
            ("C-c a t" . eca-chat-toggle-window)
            ("C-c a n" . eca-chat-new)
