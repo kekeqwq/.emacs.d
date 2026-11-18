@@ -2926,33 +2926,27 @@ Mac 的 Karabiner 全配置由 Nix 管理，原设备/KikiBridge 设置在 flake
                          (/ (face-attribute 'default :height nil t) 10.0)
                        (if (and (numberp size) (> size 0) (<= size 48)) size 16))))
         (format "%s-%s" (face-attribute 'default :family nil t) points)))
-    (defvar my/rime--styling nil)
+    (defvar my/rime--palette nil)
     (defun my/rime-sync-theme (&rest _)
-      "Keep candidate faces and the existing child frame on the active theme."
+      "Update candidate faces only when their GUI palette changes."
       (when (and (display-graphic-p) (facep 'rime-default-face))
-        (let ((fg (face-attribute 'default :foreground nil t))
-              (bg (face-attribute 'default :background nil t))
-              (border (face-attribute 'font-lock-keyword-face :foreground nil t)))
-          (set-face-attribute 'rime-default-face nil :inherit 'default
-                              :foreground fg :background bg)
-          (set-face-attribute 'rime-code-face nil :inherit 'font-lock-keyword-face
-                              :foreground 'unspecified :background 'unspecified)
-          (set-face-attribute 'rime-highlight-candidate-face nil :inherit 'highlight
-                              :foreground fg
-                              :background (face-attribute 'highlight :background nil t)
-                              :weight 'bold)
-          (dolist (face '(rime-comment-face rime-candidate-num-face))
-            (set-face-attribute face nil :inherit 'shadow
-                                :foreground 'unspecified :background 'unspecified))
-          (set-face-attribute 'rime-cursor-face nil :inherit 'default
-                              :foreground 'unspecified :background 'unspecified)
-          (when-let* ((buffer (get-buffer rime-posframe-buffer))
-                      (frame (buffer-local-value 'posframe--frame buffer))
-                      ((frame-live-p frame)))
-            (modify-frame-parameters frame `((background-color . ,bg) (foreground-color . ,fg)
-                                              (internal-border-color . ,border)))
-            (dolist (face '(internal-border child-frame-border))
-              (when (facep face) (set-face-background face border frame)))))))
+        (let* ((fg (face-attribute 'default :foreground nil t))
+               (bg (face-attribute 'default :background nil t))
+               (highlight (face-attribute 'highlight :background nil t))
+               (palette (list fg bg highlight)))
+          (unless (equal palette my/rime--palette)
+            (setq my/rime--palette palette)
+            (set-face-attribute 'rime-default-face nil :inherit 'default
+                                :foreground fg :background bg)
+            (set-face-attribute 'rime-code-face nil :inherit 'font-lock-keyword-face
+                                :foreground 'unspecified :background 'unspecified)
+            (set-face-attribute 'rime-highlight-candidate-face nil :inherit 'highlight
+                                :foreground fg :background highlight :weight 'bold)
+            (dolist (face '(rime-comment-face rime-candidate-num-face))
+              (set-face-attribute face nil :inherit 'shadow
+                                  :foreground 'unspecified :background 'unspecified))
+            (set-face-attribute 'rime-cursor-face nil :inherit 'default
+                                :foreground 'unspecified :background 'unspecified)))))
     (defun my/rime-use-cjk (frame)
       "Use JinKai for Chinese and explicit emoji/symbol fallback on FRAME."
       (when (frame-live-p frame)
@@ -2969,23 +2963,26 @@ Mac 的 Karabiner 全配置由 Nix 管理，原设备/KikiBridge 设置在 flake
             (dolist (characters '(emoji (#x1f000 . #x1faff)))
               (set-fontset-font t characters (font-spec :family emoji) frame 'prepend))))))
     (add-hook 'enable-theme-functions #'my/rime-sync-theme t)
+    (add-hook 'disable-theme-functions #'my/rime-sync-theme t)
     (my/rime-sync-theme)
     (defun my/rime-style-candidates (original content)
-      (if my/rime--styling
+      (if (or (not (display-graphic-p)) (string-blank-p content))
           (funcall original content)
-        (let ((my/rime--styling t))
-          (my/rime-sync-theme)
-          (setq rime-posframe-properties
-                (list :font (my/rime-font-name)
-                      :border-color (face-attribute 'font-lock-keyword-face :foreground nil t)
-                      :border-width 1
-                      :left-fringe 6 :right-fringe 6))
-          (funcall original content)
-          (let* ((buffer (get-buffer rime-posframe-buffer))
-                 (frame (and buffer (buffer-local-value 'posframe--frame buffer))))
-            (when (frame-live-p frame)
+        (my/rime-sync-theme)
+        (let ((rime-posframe-properties
+               (list :font (my/rime-font-name)
+                     :border-color (face-attribute 'font-lock-keyword-face :foreground nil t)
+                     :border-width 1
+                     :left-fringe 6 :right-fringe 6)))
+          (prog1 (funcall original content)
+            (when-let* ((buffer (get-buffer rime-posframe-buffer))
+                        (frame (buffer-local-value 'posframe--frame buffer))
+                        ((frame-live-p frame))
+                        ((not (frame-parameter frame 'my/rime-fontset-ready))))
+              ;; Reapplying fontsets and forcing a repaint on each keystroke
+              ;; makes the visible candidate frame flicker.
               (my/rime-use-cjk frame)
-              (redraw-frame frame))))))
+              (set-frame-parameter frame 'my/rime-fontset-ready t))))))
     (advice-add 'rime--posframe-display-content :around #'my/rime-style-candidates)
     (add-to-list 'rime-disable-predicates #'my/rime--ascii-only)
     (advice-add 'rime-compile-module :override #'my/rime-core-rebuild-required)
