@@ -945,7 +945,9 @@ Cape 提供额外的 =completion-at-point= 后端函数，如 dabbrev（动态�
 给错误/警告计数留出空间，不重写分段或其他样式。
 图标字体 =Symbols Nerd Font Mono= 由 flakes 安装；不替换正文或 Org 字体。
 文件名按每个窗格的剩余像素宽度动态省略（尽量保留扩展名），优先给其他现有栏位
-留空间；鼠标悬停仍可查看完整路径，不更改 buffer 或文件名。
+留空间；鼠标悬停仍可查看完整路径，不更改 buffer 或文件名。高度按实际 GUI 字体计算：
+新版 doom-modeline 在包加载时求默认值，daemon 无头启动会把它压成 5 像素，
+所以首个 GUI frame 出现时重新按字体计算，恢复原版留白。
 
 #+begin_src emacs-lisp
   (use-package doom-modeline
@@ -956,6 +958,19 @@ Cape 提供额外的 =completion-at-point= 后端函数，如 dabbrev（动态�
     (line-number-mode 1)
     (column-number-mode 1)
     (doom-modeline-mode 1)
+
+    (defun my/doom-modeline-sync-height (&optional frame)
+      "Reserve the intended modeline padding once a GUI frame exists.
+New Doom Modeline derives `doom-modeline-height' from the font at
+load time; daemon startup loads it before any GUI font is visible,
+leaving a cramped 5-pixel modeline."
+      (let ((frame (or frame (selected-frame))))
+        (when (and (display-graphic-p frame) (not (frame-parent frame)))
+          (with-selected-frame frame
+            (setq doom-modeline-height
+                  (+ (window-font-height nil 'mode-line) 4))))))
+    (add-hook 'after-make-frame-functions #'my/doom-modeline-sync-height)
+    (my/doom-modeline-sync-height)
 
     (defun my/modeline-mark-file-name (text)
       "Mark just the filename inside Doom's buffer-info segment."
