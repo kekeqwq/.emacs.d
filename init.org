@@ -2965,6 +2965,25 @@ Mac 的 Karabiner 全配置由 Nix 管理，原设备/KikiBridge 设置在 flake
     (add-hook 'enable-theme-functions #'my/rime-sync-theme t)
     (add-hook 'disable-theme-functions #'my/rime-sync-theme t)
     (my/rime-sync-theme)
+    (defun my/rime-snap-candidate-frame (frame)
+      "Keep the candidate frame on the pixel grid and repaint its border.
+Posframe resizes and moves the child frame on every keystroke.  The
+window server resamples its one-pixel border during the resize, and
+normal redisplay never repaints border pixels, so the border fades
+away; repainting the whole frame instead makes the box flicker."
+      (when (frame-live-p frame)
+        (let ((border (face-attribute 'font-lock-keyword-face :foreground nil t)))
+          (set-frame-position frame
+                              (round (or (frame-parameter frame 'left) 0))
+                              (round (or (frame-parameter frame 'top) 0)))
+          (set-frame-size frame (frame-pixel-width frame) (frame-pixel-height frame) t)
+          (dolist (face '(internal-border child-frame-border))
+            (when (facep face)
+              ;; Reset through another color: a same-value set is skipped.
+              (set-face-background face "#000000" frame)
+              (set-face-background face border frame)))
+          (modify-frame-parameters
+           frame `((internal-border-color . ,(copy-sequence border)))))))
     (defun my/rime-style-candidates (original content)
       (if (or (not (display-graphic-p)) (string-blank-p content))
           (funcall original content)
@@ -2977,12 +2996,13 @@ Mac 的 Karabiner 全配置由 Nix 管理，原设备/KikiBridge 设置在 flake
           (prog1 (funcall original content)
             (when-let* ((buffer (get-buffer rime-posframe-buffer))
                         (frame (buffer-local-value 'posframe--frame buffer))
-                        ((frame-live-p frame))
-                        ((not (frame-parameter frame 'my/rime-fontset-ready))))
-              ;; Reapplying fontsets and forcing a repaint on each keystroke
-              ;; makes the visible candidate frame flicker.
-              (my/rime-use-cjk frame)
-              (set-frame-parameter frame 'my/rime-fontset-ready t))))))
+                        ((frame-live-p frame)))
+              (my/rime-snap-candidate-frame frame)
+              (unless (frame-parameter frame 'my/rime-fontset-ready)
+                ;; Reapplying fontsets on each keystroke makes the visible
+                ;; candidate frame flicker.
+                (my/rime-use-cjk frame)
+                (set-frame-parameter frame 'my/rime-fontset-ready t)))))))
     (advice-add 'rime--posframe-display-content :around #'my/rime-style-candidates)
     (add-to-list 'rime-disable-predicates #'my/rime--ascii-only)
     (advice-add 'rime-compile-module :override #'my/rime-core-rebuild-required)
