@@ -2596,9 +2596,11 @@ macOS 从 =~/Library/Rime=，Linux 从 =~/.local/share/fcitx5/rime= 自动生成
 运行数据库、=build/=、安装标识单独保存在 =~/.local/share/emacs-rime/=，绝不链接
 系统输入法的 =*.userdb/=。一次只允许一个 Emacs 进程使用该运行目录，多个 frame 不受限。
 
-GUI 中单按左 Shift（500ms 内释放）切换中文，=C-\= 是备用键；仅在 Meow INSERT
-有效。Shift 加其他键仍是原组合键；右 Shift 保持原样。进入 INSERT 默认英文，
-退出 INSERT 关闭输入法；预编辑中 Esc 直接取消并返回 NORMAL。切英文时按共享方案的
+GUI 中单按左 Shift（500ms 内释放）切换中英文，=C-\= 是备用键；在 Meow INSERT
+和 =M-x= 等活动 minibuffer、=C-s= / =C-r= 增量搜索中有效，普通 NORMAL 缓冲区不启用。
+Shift 加其他键仍是原组合键；
+右 Shift 保持原样。进入 INSERT 默认英文，退出 INSERT 或 minibuffer 时关闭该缓冲区的输入法。
+预编辑中 Esc 取消输入；编辑区返回 NORMAL，minibuffer 保留当前提示。切英文时按共享方案的
 左 Shift 规则处理预编辑。macOS 系统输入法统一由 flakes 中的 Hammerspoon 管理：
 Emacs/Tinycast 用真正的 ABC，WezTerm（含 tmux）只有当前 pi 文本输入框用鼠须管中文。
 旧鼠须管 =app_options= 英文锁定和 Emacs/macism 的焦点切换已移除。
@@ -2770,15 +2772,108 @@ Mac 的 Karabiner 全配置由 Nix 管理，原设备/KikiBridge 设置在 flake
     (defun my/rime-core-rebuild-required (&rest _)
       (user-error "Rime native core is managed by Nix; rebuild/update flakes rather than compiling inside Emacs"))
 
-    (defun my/rime-before-activate (&rest _)
-      "Protect activation paths other than the Shift/C-backslash binding too."
-      (unless (bound-and-true-p meow-insert-mode)
-        (user-error "Emacs Rime is available only in Meow INSERT"))
+    (defun my/rime-input-allowed-p ()
+      "Allow Rime in editable Meow state and active minibuffer prompts."
+      (or (minibufferp nil t) (bound-and-true-p meow-insert-mode)))
+
+    (defvar-local my/rime--minibuffer-candidates nil)
+    (defconst my/rime--prompt-posframe-buffer " *Rime prompt candidates*")
+
+    (defun my/rime-display-minibuffer-inline (content)
+      "Show CONTENT in a prompt without a graphical candidate frame."
+      (if (string-blank-p content)
+          (when (overlayp my/rime--minibuffer-candidates)
+            (delete-overlay my/rime--minibuffer-candidates)
+            (setq my/rime--minibuffer-candidates nil))
+        (unless (overlayp my/rime--minibuffer-candidates)
+          (setq my/rime--minibuffer-candidates (make-overlay (point-max) (point-max)))
+          ;; Vertico's candidate list is a separate overlay on the same buffer.
+          (overlay-put my/rime--minibuffer-candidates 'priority 1))
+        (move-overlay my/rime--minibuffer-candidates (point-max) (point-max))
+        (overlay-put my/rime--minibuffer-candidates 'before-string
+                     (concat "\n" (string-trim-right content)))))
+
+    (defun my/rime-prompt-poshandler-above-echo-area (info)
+      "Place candidates inside the parent frame, immediately above the echo area."
+      (let* ((parent (plist-get info :parent-frame))
+             (mini (minibuffer-window parent))
+             (edges (and (eq (window-frame mini) parent) (window-pixel-edges mini)))
+             (bottom (or (nth 1 edges) (- (plist-get info :parent-frame-height)
+                                          (plist-get info :minibuffer-height)))))
+        ;; A negative, bottom-relative Y is interpreted differently by NS child
+        ;; frames.  Use actual frame-relative pixels instead.
+        (cons (max 0 (min (+ (or (car edges) 0) 8)
+                          (- (plist-get info :parent-frame-width) (plist-get info :posframe-width))))
+              (max 0 (- bottom (plist-get info :posframe-height) 4)))))
+
+    (defun my/rime-display-minibuffer-candidates (content &optional source-window)
+      "Show candidates beside the prompt, separate from its completion list.
+SOURCE-WINDOW is non-nil for Isearch, which has no minibuffer window."
+      (let* ((prompt (current-buffer))
+             (origin (or source-window (minibuffer-selected-window)))
+             (completion-frame (and (not source-window) (boundp 'posframe--frame) posframe--frame)))
+        (cond
+         ((string-blank-p content)
+          (my/rime-display-minibuffer-inline "")
+          (when (featurep 'posframe) (posframe-hide my/rime--prompt-posframe-buffer)))
+         ((and (window-live-p origin) (featurep 'posframe)
+               (display-graphic-p (window-frame origin)))
+          (my/rime-display-minibuffer-inline "")
+          (with-selected-window origin
+            (if (not (posframe-workable-p))
+                (if source-window (progn (message "%s" (string-trim content)) :echo-area)
+                  (with-current-buffer prompt (my/rime-display-minibuffer-inline content)))
+              (let ((rime-posframe-buffer my/rime--prompt-posframe-buffer))
+                (my/rime-style-candidates
+                 (lambda (text)
+                   (apply #'posframe-show rime-posframe-buffer :string text
+                          :poshandler
+                          (lambda (info)
+                            (if (and (frame-live-p completion-frame)
+                                     (eq (frame-parent completion-frame) (plist-get info :parent-frame))
+                                     (frame-visible-p completion-frame)
+                                     (integerp (frame-parameter completion-frame 'left))
+                                     (integerp (frame-parameter completion-frame 'top)))
+                                (let* ((left (frame-parameter completion-frame 'left))
+                                       (top (frame-parameter completion-frame 'top))
+                                       (height (plist-get info :posframe-height))
+                                       (bottom (+ top (frame-pixel-height completion-frame))))
+                                  (cons left (if (<= (+ bottom height 4)
+                                                    (plist-get info :parent-frame-height))
+                                                 (+ bottom 4) (max 0 (- top height 4)))))
+                              (my/rime-prompt-poshandler-above-echo-area info)))
+                          :max-width (max 20 (- (window-total-width (frame-root-window)) 4))
+                          :foreground-color (face-foreground 'rime-default-face nil t)
+                          :background-color (face-background 'rime-default-face nil t)
+                          rime-posframe-properties))
+                 content)))))
+         (source-window (message "%s" (string-trim content)) :echo-area)
+         (t (my/rime-display-minibuffer-inline content)))))
+
+    (defun my/rime-minibuffer-exit ()
+      "Clear this prompt's Rime state without touching the originating buffer."
+      (when (equal current-input-method "rime")
+        (deactivate-input-method))
+      (my/rime-display-minibuffer-candidates ""))
+
+    (defun my/rime-prepare-activation ()
+      "Ensure OS input is English and prepare Rime's private runtime."
       (unless (eq system-type 'darwin)
         (when (and (display-graphic-p) (not my/rime--os-owned))
           (my/rime-focus-update)
           (unless my/rime--os-owned (user-error "External IME could not be switched to English"))))
       (unless rime--lib-loaded (my/rime-prepare)))
+
+    (defun my/rime-before-activate (&rest _)
+      "Protect activation paths other than the Shift/C-backslash binding too."
+      (unless (my/rime-input-allowed-p)
+        (user-error "Emacs Rime cannot edit this buffer outside Meow INSERT"))
+      (my/rime-prepare-activation)
+      (when (minibufferp)
+        ;; Rime's stock exit hook is global; isolate cleanup to this prompt
+        ;; so a nested minibuffer cannot deactivate its caller's input method.
+        (setq-local rime-deactivate-when-exit-minibuffer nil)
+        (add-hook 'minibuffer-exit-hook #'my/rime-minibuffer-exit nil t)))
 
     (defun my/rime-after-activate (&rest _)
       "On first use, select the external IME's last schema without sharing user.yaml."
@@ -2788,12 +2883,12 @@ Mac 的 Karabiner 全配置由 Nix 管理，原设备/KikiBridge 设置在 flake
         (setq my/rime--initial-schema nil)))
 
     (defun my/rime--ascii-only ()
-      (not (bound-and-true-p meow-insert-mode)))
+      (not (my/rime-input-allowed-p)))
 
     (defun my/rime-toggle ()
-      "Toggle Chinese in INSERT only.  F13/Shift is harmless in NORMAL."
+      "Toggle Chinese in INSERT or a prompt.  F13/Shift is harmless in NORMAL."
       (interactive)
-      (if (not (bound-and-true-p meow-insert-mode))
+      (if (not (my/rime-input-allowed-p))
           (when current-input-method (deactivate-input-method))
         (if current-input-method
             (progn
@@ -2816,14 +2911,96 @@ Mac 的 Karabiner 全配置由 Nix 管理，原设备/KikiBridge 设置在 flake
       (when current-input-method (deactivate-input-method)))
 
     (defun my/rime-normal-guard ()
-      (when (and current-input-method (not (bound-and-true-p meow-insert-mode)))
+      (when (and current-input-method (not (my/rime-input-allowed-p)))
         (deactivate-input-method)))
 
     (defun my/rime-escape ()
-      "Cancel unfinished composition and return directly to Meow NORMAL."
+      "Cancel composition; leave INSERT only in an ordinary buffer."
       (interactive)
-      (deactivate-input-method)
-      (when (bound-and-true-p meow-insert-mode) (meow-insert-exit)))
+      (if (minibufferp nil t)
+          (rime--escape)
+        (deactivate-input-method)
+        (when (bound-and-true-p meow-insert-mode) (meow-insert-exit))))
+
+    (defvar-local my/rime--isearch-state nil)
+    (defvar-local my/rime--isearch-saved-ascii nil)
+
+    (defun my/rime-isearch-end ()
+      "Clear search composition without changing the source input method."
+      (when my/rime--isearch-state
+        (rime-lib-clear-composition)
+        (rime-lib-set-option "ascii_mode" my/rime--isearch-saved-ascii)
+        (setq my/rime--isearch-state nil)
+        (my/rime-display-minibuffer-candidates "" (selected-window))))
+
+    (defun my/rime-isearch-append (text)
+      (unless (string-empty-p (or text ""))
+        (isearch-process-search-string text (mapconcat #'isearch-text-char-description text ""))))
+
+    (defun my/rime-isearch-toggle ()
+      "Toggle Chinese for the search query, never for the source buffer."
+      (interactive)
+      (when my/rime-integration-mode
+        (if (eq my/rime--isearch-state 'chinese)
+            (progn
+              (rime--inline-ascii)
+              (my/rime-isearch-append (rime-lib-get-commit))
+              (rime-lib-clear-composition)
+              (setq my/rime--isearch-state 'english)
+              (my/rime-display-minibuffer-candidates "" (selected-window)))
+          (my/rime-prepare-activation)
+          (unless rime--lib-loaded (rime--load-dynamic-module))
+          (unless (string-equal rime-version (rime-lib-version))
+            (my/rime-core-rebuild-required))
+          (my/rime-after-activate)
+          (unless my/rime--isearch-state
+            (setq my/rime--isearch-saved-ascii (rime-lib-get-option "ascii_mode")))
+          (rime-lib-clear-composition)
+          (rime-lib-set-option "ascii_mode" nil)
+          (setq my/rime--isearch-state 'chinese))
+        (isearch-update)))
+
+    (defun my/rime-isearch-toggle-default-method (original)
+      "Use the search-only Rime toggle for the standard `C-\\' binding too."
+      (if (and my/rime-integration-mode (equal default-input-method "rime")
+               (or (null current-input-method) (equal current-input-method "rime")))
+          (my/rime-isearch-toggle)
+        (funcall original)))
+
+    (defun my/rime-isearch-feed (key)
+      "Send KEY to Rime and append any committed text to Isearch only."
+      (let ((handled (rime-lib-process-key key 0)))
+        (my/rime-isearch-append (rime-lib-get-commit))
+        (let* ((rime-posframe-style 'horizontal)
+               (display (my/rime-display-minibuffer-candidates
+                         (subst-char-in-string ?\n ?\s (rime--build-candidate-content))
+                         (selected-window))))
+          ;; A key clears the echo area, but uncommitted pinyin does not
+          ;; update the search.  Restore its prompt after drawing the popup,
+          ;; unless a terminal fallback is using the echo area for candidates.
+          (when (and handled (not (eq display :echo-area)))
+            (funcall (or isearch-message-function #'isearch-message))))
+        handled))
+
+    (defun my/rime-isearch-printing-char (original &optional char count)
+      (let ((char (or char last-command-event)))
+        (if (not (and my/rime--isearch-state (bound-and-true-p isearch-mode)))
+            (funcall original char count)
+          (unless (and (eq my/rime--isearch-state 'chinese)
+                       (my/rime-isearch-feed (if (eq char ?\S-\s) ?\s char)))
+            (let ((current-input-method nil)) (funcall original char count))))))
+
+    (defun my/rime-isearch-composing-p ()
+      (and (eq my/rime--isearch-state 'chinese)
+           (rime--has-composition (rime-lib-get-context))))
+
+    (defun my/rime-isearch-backspace (original)
+      (if (my/rime-isearch-composing-p) (my/rime-isearch-feed #xff08)
+        (funcall original)))
+
+    (defun my/rime-isearch-return (original)
+      (if (my/rime-isearch-composing-p) (my/rime-isearch-feed ?\s)
+        (funcall original)))
 
     (defun my/rime-sync ()
       "Merge shared Rime snapshots, not running external databases."
@@ -2879,7 +3056,7 @@ Mac 的 Karabiner 全配置由 Nix 管理，原设备/KikiBridge 设置在 flake
       (when my/rime--lock (unlock-file my/rime--lock) (setq my/rime--lock nil)))
 
     (define-minor-mode my/rime-integration-mode
-      "GUI Rime input in Meow INSERT only, sharing external configuration."
+      "Rime input in Meow INSERT and minibuffer prompts, sharing external configuration."
       :global t :lighter nil
       :keymap (let ((map (make-sparse-keymap)))
                 (define-key map (kbd "<f13>") #'rime-meow-toggle)
@@ -2972,10 +3149,12 @@ window server resamples its one-pixel border during the resize, and
 normal redisplay never repaints border pixels, so the border fades
 away; repainting the whole frame instead makes the box flicker."
       (when (frame-live-p frame)
-        (let ((border (face-attribute 'font-lock-keyword-face :foreground nil t)))
-          (set-frame-position frame
-                              (round (or (frame-parameter frame 'left) 0))
-                              (round (or (frame-parameter frame 'top) 0)))
+        (let ((border (face-attribute 'font-lock-keyword-face :foreground nil t))
+              (left (frame-parameter frame 'left))
+              (top (frame-parameter frame 'top)))
+          ;; Posframe can use edge-relative coordinates such as (+ -28).
+          (when (and (numberp left) (numberp top))
+            (set-frame-position frame (round left) (round top)))
           (set-frame-size frame (frame-pixel-width frame) (frame-pixel-height frame) t)
           (dolist (face '(internal-border child-frame-border))
             (when (facep face)
@@ -3004,6 +3183,18 @@ away; repainting the whole frame instead makes the box flicker."
                 (my/rime-use-cjk frame)
                 (set-frame-parameter frame 'my/rime-fontset-ready t)))))))
     (advice-add 'rime--posframe-display-content :around #'my/rime-style-candidates)
+    ;; The stock minibuffer renderer inserts candidate text and calls sit-for.
+    ;; Keep prompt text clean and let the normal command loop handle C-g/RET.
+    (advice-add 'rime--minibuffer-message :override #'my/rime-display-minibuffer-candidates)
+    (with-eval-after-load 'isearch
+      (define-key isearch-mode-map (kbd "<f13>") #'my/rime-isearch-toggle)
+      (when (eq system-type 'gnu/linux)
+        (define-key isearch-mode-map (kbd "<Tools>") #'my/rime-isearch-toggle)))
+    (add-hook 'isearch-mode-end-hook #'my/rime-isearch-end)
+    (advice-add 'isearch-toggle-input-method :around #'my/rime-isearch-toggle-default-method)
+    (advice-add 'isearch-printing-char :around #'my/rime-isearch-printing-char)
+    (advice-add 'isearch-delete-char :around #'my/rime-isearch-backspace)
+    (advice-add 'isearch-exit :around #'my/rime-isearch-return)
     (add-to-list 'rime-disable-predicates #'my/rime--ascii-only)
     (advice-add 'rime-compile-module :override #'my/rime-core-rebuild-required)
     (advice-add 'rime-activate :before #'my/rime-before-activate)
