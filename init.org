@@ -2493,6 +2493,105 @@ macOS 上 =y= 复制到系统剪贴板，可在其它应用用 =⌘V= 粘贴；�
   (meow-global-mode 1))
 #+end_src
 
+* 终端与对话的 Meow 两态
+
+Ghostel 终端和 ECA 对话都只有一个尾部输入区，这里统一成 Vim 式循环：
+打开即 =INSERT=（细光标），输入后 =RET= 提交并回到 =NORMAL=（粗光标），
+=NORMAL= 不可输入、用 =hjkl= 与 =e= / =y= 等 Meow 功能导航翻阅输出，
+=i= 跳回当前可输入的 prompt 处并变回细光标，如此往复。跳转目标是终端的
+实时光标（=ghostel--cursor-char-pos=，即 prompt 输入点），不是 buffer 末尾的
+空白网格行。终端自行声明的光标样式（DECSCUSR）不覆盖 Meow 光标。
+=NORMAL= 下 =RET= 会被拦下，避免把残留草稿误提交。
+Meow 的 =hjkl= 等移动是把 =C-b/C-p/C-n/C-f= 重新查键表实现的，而终端把这些
+控制键送给终端；因此这里让这类重派发在输入 buffer 内改用全局 Emacs 绑定，
+移动、=y= 复制等才会真正作用于 buffer 而不是被写进 shell 输入行。
+
+#+begin_src emacs-lisp
+(defun my/input-buffer-p ()
+  "Non-nil when the buffer confines user input to one trailing field."
+  (derived-mode-p 'ghostel-mode 'eca-chat-mode))
+
+(defun my/input-buffer-input-pos ()
+  "Return where new user input lands in a terminal or chat buffer.
+For a terminal this is the live terminal cursor - the point the shell
+will echo at - not the trailing blank rows of the terminal grid."
+  (cond ((and (derived-mode-p 'ghostel-mode)
+              (boundp 'ghostel--cursor-char-pos))
+         (or ghostel--cursor-char-pos
+             (and (fboundp 'ghostel-input-start-point) (ghostel-input-start-point))
+             (point-max)))
+        (t (point-max))))
+
+(defun my/input-buffer-insert-enter ()
+  "Jump to the trailing input field when entering INSERT."
+  (when (my/input-buffer-p)
+    (goto-char (my/input-buffer-input-pos))))
+
+(defun my/input-buffer-normal-after-submit ()
+  "Return to meow NORMAL once input has been submitted.
+The typed text is not kept as a transient selection."
+  (when (bound-and-true-p meow-insert-mode)
+    (setq-local meow--insert-pos (point))
+    (meow-insert-exit)))
+
+(defun my/meow-kbd-avoid-terminal (original key-or-defun)
+  "Keep meow's motion macros on ordinary Emacs commands in input buffers.
+Meow implements \[meow-left], \[meow-prev] and friends by re-dispatching
+the key they expect (\`C-b', \`C-p', ...).  In a terminal those keys are
+captured for the terminal process, so meow would forward its own key
+instead of moving point.  Substitute the ordinary global binding when
+the lookup lands on a terminal passthrough."
+  (if (and (my/input-buffer-p) (not (and (symbolp key-or-defun) (fboundp key-or-defun))))
+      (let* ((seq (read-kbd-macro key-or-defun))
+             (cmd (key-binding seq))
+             (global-cmd (with-temp-buffer (key-binding seq))))
+        (if (memq cmd '(ghostel--send-event ghostel--self-insert
+                        ghostel-readonly-exit-and-send))
+            (when global-cmd (funcall original global-cmd))
+          (funcall original key-or-defun)))
+    (funcall original key-or-defun)))
+
+(defun my/ghostel-return-submit (original &rest args)
+  "Send Return to the terminal from INSERT, then return to NORMAL.
+In NORMAL the event is swallowed: typing is disabled there, and a
+stray Return must not submit whatever is sitting in the input line."
+  (cond
+   ;; RET and C-m both arrive as `?\r'; `event-basic-type' folds them to `?m'.
+   ((not (memq last-command-event '(return kp-enter ?\r)))
+    (apply original args))
+   ((not (bound-and-true-p meow-insert-mode))
+    (ding))
+   (t
+    (prog1 (apply original args)
+      (my/input-buffer-normal-after-submit)))))
+
+(defun my/eca-return-submit (original &rest args)
+  "Send the prompt, then return to NORMAL when the prompt was taken.
+Only submission clears the prompt; completion acceptance and button
+actions leave it in place and keep INSERT."
+  (let ((before (ignore-errors (eca-chat--prompt-content))))
+    (prog1 (apply original args)
+      (when (and before
+                 (not (string-empty-p before))
+                 (string-empty-p (ignore-errors (eca-chat--prompt-content))))
+        (my/input-buffer-normal-after-submit)))))
+
+;; Meow picks the state for a major mode from this list before probing keys.
+;; Elpaca loads meow asynchronously, so wait for it before touching the list.
+(with-eval-after-load 'meow
+  (dolist (entry '((ghostel-mode . insert) (eca-chat-mode . insert)))
+    (add-to-list 'meow-mode-state-list entry))
+  (add-hook 'meow-insert-enter-hook #'my/input-buffer-insert-enter)
+  (advice-add 'meow--execute-kbd-macro :around #'my/meow-kbd-avoid-terminal))
+(with-eval-after-load 'ghostel
+  ;; The editor owns the cursor; DECSCUSR shape requests would flip INSERT
+  ;; back to a block cursor while typing.
+  (setq ghostel-ignore-cursor-change t)
+  (advice-add 'ghostel--send-event :around #'my/ghostel-return-submit))
+(with-eval-after-load 'eca-chat
+  (advice-add 'eca-chat--key-pressed-return :around #'my/eca-return-submit))
+#+end_src
+
 * 动态键位速查
 
 普通模式 =SPC ?= 使用居中 Vertico 浮窗，读取实时 Meow 普通模式键位和当前
