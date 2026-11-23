@@ -522,6 +522,13 @@ GUI 默认居中浮窗，颜色随主题变化；Consult 正文搜索默认底�
       minibuffer-prompt-properties '(read-only t cursor-intangible t face minibuffer-prompt))
 (add-hook 'minibuffer-setup-hook #'cursor-intangible-mode)
 
+(defun my/vertico-cycle-keys ()
+  "Cycle Vertico candidates on Tab, including GUI and TTY key variants."
+  (dolist (key '("TAB" "<tab>"))
+    (define-key vertico-map (kbd key) #'vertico-next))
+  (dolist (key '("S-TAB" "S-<tab>" "<backtab>"))
+    (define-key vertico-map (kbd key) #'vertico-previous)))
+
 (use-package vertico
   :demand t
   :custom
@@ -531,6 +538,7 @@ GUI 默认居中浮窗，颜色随主题变化；Consult 正文搜索默认底�
   :config
   (vertico-mode 1)
   (require 'vertico-directory)
+  (my/vertico-cycle-keys)
   (define-key vertico-map (kbd "RET") #'vertico-directory-enter)
   (define-key vertico-map (kbd "DEL") #'vertico-directory-delete-char)
   (define-key vertico-map (kbd "M-DEL") #'vertico-directory-delete-word))
@@ -668,15 +676,35 @@ GUI 默认居中浮窗，颜色随主题变化；Consult 正文搜索默认底�
 
 Corfu 在光标处显示补全候选弹窗，轻量且快速，替代 company-mode。
 与 Vertico 共用主题背景、选中行、强调色匹配和细边框；图标缓存随主题重新生成。
-只统一外观，不改变 Eglot/LSP、CAPF 或 Corfu 的补全行为。
+候选框打开后，=Tab= / =Shift-Tab= 循环选择，=RET= 接受候选。
 
 #+begin_src emacs-lisp
+  (defun my/corfu-cycle-keys ()
+    "Cycle Corfu candidates with either spelling of Tab and backtab."
+    (dolist (key '("TAB" "<tab>"))
+      (define-key corfu-map (kbd key) #'corfu-next))
+    (dolist (key '("S-TAB" "<backtab>" "S-<tab>"))
+      (define-key corfu-map (kbd key) #'corfu-previous)))
+
+  (defun my/corfu-pad-popup-width (original candidates)
+    "Leave room at the right edge of a graphical Corfu popup.
+Corfu estimates its width from character columns.  Add two columns
+for glyph and icon widths that do not fit that estimate exactly."
+    (pcase-let ((`(,prefix ,width ,lines) (funcall original candidates)))
+      (list prefix
+            (if (display-graphic-p)
+                (max width (min (+ width 2) corfu-max-width (- (frame-width) 4)))
+              width)
+            lines)))
+
   (use-package corfu
     :custom
     (corfu-auto t)
     (corfu-cycle t)
     (global-corfu-minibuffer nil)
     :init
+    (my/corfu-cycle-keys)
+    (advice-add 'corfu--format-candidates :around #'my/corfu-pad-popup-width)
     (global-corfu-mode)
     :config
     (setq corfu-border-width 1)
@@ -699,6 +727,9 @@ Corfu 在光标处显示补全候选弹窗，轻量且快速，替代 company-mo
             '(:padding -1.2 :stroke 0 :margin 0 :radius 0 :height 0.3 :scale 1.0))
       (kind-icon-reset-cache))
     ;; ----------------------------
+    ;; Match the shell prompt without needing a separate icon font or SVG.
+    (setf (alist-get 'ghostel-shell kind-icon-mapping)
+          '("❯" :face font-lock-function-name-face))
     (add-to-list 'corfu-margin-formatters #'kind-icon-margin-formatter)
     (my/completion-sync-theme))
 #+end_src
@@ -787,28 +818,12 @@ Cape 提供额外的 =completion-at-point= 后端函数，如 dabbrev（动态�
         (tempel-previous)
       (python-indent-dedent-line)))
 
-  (defun my/python-snippet-corfu-tab ()
-    "Let exact snippets expand with one Tab even when Corfu is already open."
-    (interactive)
-    (let ((selected (and (>= corfu--index 0) (nth corfu--index corfu--candidates))))
-      (if (and (not (bound-and-true-p tempel--active))
-               (my/python-snippet-context-p)
-               (tempel-expand)
-               (or (not selected)
-                   (equal (substring-no-properties selected) (thing-at-point 'symbol t))))
-          (progn (corfu-quit) (my/python-snippet-expand))
-        (corfu-complete))))
-
   (defun my/python-snippet-setup ()
-    "Install snippets and private completion/field keymaps only for Python."
+    "Install snippets and a private field keymap only for Python."
     (when (derived-mode-p 'python-mode 'python-ts-mode)
       (add-hook 'tempel-template-sources 'my/python-snippet-templates nil t)
       (add-hook 'completion-at-point-functions #'my/python-snippet-capf nil t)
-      ;; These copies are buffer-local: Corfu in other languages is untouched.
-      (when (boundp 'corfu-map)
-        (setq-local corfu-map (copy-keymap corfu-map))
-        (define-key corfu-map (kbd "TAB") #'my/python-snippet-corfu-tab)
-        (define-key corfu-map (kbd "<tab>") #'my/python-snippet-corfu-tab))
+      ;; Corfu uses the global navigation keys; only Tempel fields need a copy.
       (setq-local tempel-map (copy-keymap tempel-map))
       (define-key tempel-map (kbd "TAB") #'tempel-next)
       (define-key tempel-map (kbd "<tab>") #'tempel-next)
@@ -2394,7 +2409,10 @@ macOS 上 =y= 复制到系统剪贴板，可在其它应用用 =⌘V= 粘贴；�
     (setq meow-use-clipboard t
           select-enable-clipboard t))
   (defun meow-setup ()
-    (setq meow-cheatsheet-layout meow-cheatsheet-layout-qwerty)
+    (setq meow-cheatsheet-layout meow-cheatsheet-layout-qwerty
+          ;; Keypad handles modifier prefixes before looking up leader keys.
+          ;; Free lowercase g for SPC g g, but keep C-M- on uppercase G.
+          meow-keypad-ctrl-meta-prefix ?G)
 
     ;; ── Motion state: 基本上下移动 ──
     (meow-motion-overwrite-define-key
@@ -2421,6 +2439,7 @@ macOS 上 =y= 复制到系统剪贴板，可在其它应用用 =⌘V= 粘贴；�
      '("t s" . my/python-scratch)
      '("f f" . my/format-buffer)
      '("f C-f" . my/format-buffer)
+     '("g g" . my/ghostel-here)
      '("/" . meow-keypad-describe-key)
      '("?" . my/keybinding-cheatsheet))
 
@@ -2541,18 +2560,30 @@ the key they expect (\`C-b', \`C-p', ...).  In a terminal those keys are
 captured for the terminal process, so meow would forward its own key
 instead of moving point.  Substitute the ordinary global binding when
 the lookup lands on a terminal passthrough."
-  (if (and (my/input-buffer-p) (not (and (symbolp key-or-defun) (fboundp key-or-defun))))
-      (let* ((seq (read-kbd-macro key-or-defun))
-             (cmd (key-binding seq))
-             (global-cmd (with-temp-buffer (key-binding seq))))
-        (if (memq cmd '(ghostel--send-event ghostel--self-insert
-                        ghostel-readonly-exit-and-send))
-            (when global-cmd (funcall original global-cmd))
+  (if (and (derived-mode-p 'ghostel-mode) (stringp key-or-defun))
+      (let ((seq (read-kbd-macro key-or-defun)))
+        (if (memq (key-binding seq) '(ghostel--send-event ghostel--self-insert
+                                      ghostel-readonly-exit-and-send))
+            (when-let* ((cmd (global-key-binding seq))
+                        ((commandp cmd))
+                        ((symbolp cmd)))
+              (funcall original cmd))
           (funcall original key-or-defun)))
     (funcall original key-or-defun)))
 
+(defun my/ghostel-normal-after-submit (buffer)
+  "Switch BUFFER to meow NORMAL once the terminal is back at a prompt.
+A Return that merely accepted a shell completion or history entry
+leaves text on the input line, so INSERT is kept."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (when (and (bound-and-true-p meow-insert-mode)
+                 (let ((start (ghostel-input-start-point)))
+                   (and start (<= (point) start))))
+        (my/input-buffer-normal-after-submit)))))
+
 (defun my/ghostel-return-submit (original &rest args)
-  "Send Return to the terminal from INSERT, then return to NORMAL.
+  "Send Return to the terminal from INSERT; return to NORMAL after a submit.
 In NORMAL the event is swallowed: typing is disabled there, and a
 stray Return must not submit whatever is sitting in the input line."
   (cond
@@ -2563,7 +2594,8 @@ stray Return must not submit whatever is sitting in the input line."
     (ding))
    (t
     (prog1 (apply original args)
-      (my/input-buffer-normal-after-submit)))))
+      ;; The terminal redraws asynchronously; judge the result shortly after.
+      (run-at-time 0.12 nil #'my/ghostel-normal-after-submit (current-buffer))))))
 
 (defun my/eca-return-submit (original &rest args)
   "Send the prompt, then return to NORMAL when the prompt was taken.
@@ -2590,6 +2622,415 @@ actions leave it in place and keep INSERT."
   (advice-add 'ghostel--send-event :around #'my/ghostel-return-submit))
 (with-eval-after-load 'eca-chat
   (advice-add 'eca-chat--key-pressed-return :around #'my/eca-return-submit))
+#+end_src
+* 终端补全与历史（Emacs 托管）
+
+Ghostel 的 =Tab= 异步调用 fish 的 =complete -C=，由 Corfu 在终端光标处
+显示候选（左侧用 =❯= 标记），并沿用全局的 =Tab= / =Shift-Tab= 轮换。=RET= 只接受候选、
+保持 =INSERT=；回到 shell 输入后再按 =RET= 才提交命令。=C-r= 读取 fish
+历史，沿用 =M-x= 的 Vertico/posframe 界面，并与 Corfu 使用相同的 =❯= 图标。
+选定后由 shell 自己回显，
+不直接修改终端网格。
+
+#+begin_src emacs-lisp
+(defun my/ghostel-terminal-input ()
+  "Return the terminal input text before the cursor."
+  (when-let* ((start (ghostel-input-start-point))
+              ((<= start (point))))
+    (buffer-substring-no-properties start (point))))
+
+(defun my/ghostel-terminal-token-start ()
+  "Return where the token at the cursor begins on the input line."
+  (save-excursion
+    (let ((bound (max (point-min)
+                      (or (ghostel-input-start-point) (line-beginning-position)))))
+      (skip-chars-backward "^ \t\n;|&()<>\"`$'" bound)
+      (point))))
+
+(defun my/ghostel-shell-directory ()
+  "Return the shell's working directory as a local filesystem path.
+`ghostel--last-directory' is an OSC 7 `file://host/path' report."
+  (let* ((raw (or (and (boundp 'ghostel--last-directory) ghostel--last-directory)
+                  default-directory))
+         (path (if (string-prefix-p "file://" raw)
+                   (let ((rest (substring raw (length "file://"))))
+                     (if (string-match "\\`[^/]*\\(/.*\\)\\'" rest)
+                         (match-string 1 rest)
+                       rest))
+                 raw)))
+    (if (and (stringp path) (file-directory-p path)) path default-directory)))
+
+(defvar-local my/ghostel-completion-process nil)
+
+(defun my/ghostel-clear-completion ()
+  "Clear the pending fish request and its buffer-local cancellation hooks."
+  (setq my/ghostel-completion-process nil)
+  (remove-hook 'pre-command-hook #'my/ghostel-cancel-completion t)
+  (remove-hook 'kill-buffer-hook #'my/ghostel-cancel-completion t))
+
+(defun my/ghostel-cancel-completion ()
+  "Discard completion before handling another command in this terminal."
+  (let ((process my/ghostel-completion-process))
+    (my/ghostel-clear-completion)
+    (when (process-live-p process)
+      (delete-process process))))
+
+(defun my/ghostel-completion-context-p (window terminal position input)
+  "Check that WINDOW still shows the terminal input that requested completion."
+  (and (eq window (selected-window))
+       (eq (current-buffer) (window-buffer window))
+       (derived-mode-p 'ghostel-mode)
+       (bound-and-true-p meow-insert-mode)
+       (eq ghostel--term terminal)
+       (= (point) position)
+       (equal (my/ghostel-terminal-input) input)))
+
+(defun my/ghostel-fish-candidates (buffer)
+  "Read fish candidates from BUFFER, without their tab-separated descriptions."
+  (with-current-buffer buffer
+    (save-excursion
+      (goto-char (point-min))
+      (let (candidates)
+        (while (re-search-forward "^\\([^\t\n]+\\).*" nil t)
+          (push (match-string-no-properties 1) candidates))
+        (nreverse candidates)))))
+
+(defun my/ghostel-corfu-context ()
+  "Return the validity predicate for the active Ghostel Corfu session."
+  (plist-get (nth 4 completion-in-region--data) :ghostel-context))
+
+(defun my/ghostel-corfu-no-preview (original &rest args)
+  "Keep terminal candidates out of the input line until explicitly accepted."
+  (if-let* ((context (my/ghostel-corfu-context)))
+      (if (funcall context)
+          (let ((corfu-preview-current nil)) (apply original args))
+        (corfu-quit))
+    (apply original args)))
+
+(defun my/ghostel-corfu-insert (original status)
+  "Finish a terminal completion without editing the terminal buffer."
+  (if-let* ((context (my/ghostel-corfu-context)))
+      (if (funcall context)
+          (corfu--done (concat corfu--base (nth corfu--index corfu--candidates))
+                       'finished corfu--candidates)
+        (corfu-quit))
+    (funcall original status)))
+
+(defun my/ghostel-corfu-configure ()
+  "Install the shell-input adapter for Corfu."
+  (advice-add 'corfu--prepare :around #'my/ghostel-corfu-no-preview)
+  (advice-add 'corfu--exhibit :around #'my/ghostel-corfu-no-preview)
+  (advice-add 'corfu--insert :around #'my/ghostel-corfu-insert))
+
+(with-eval-after-load 'corfu (my/ghostel-corfu-configure))
+
+(defun my/ghostel-corfu-start (candidates window terminal position input erase)
+  "Start a Corfu session using already-filtered fish CANDIDATES."
+  (when completion-in-region-mode (corfu-quit))
+  (let* ((context (lambda () (my/ghostel-completion-context-p window terminal position input)))
+         (completion-in-region-mode-predicate context)
+         (completion-extra-properties
+          (list :ghostel-context context
+                :company-kind (lambda (_candidate) 'ghostel-shell)
+                :exit-function (lambda (choice _status)
+                                 (when (funcall context)
+                                   (my/ghostel-send-replacement erase choice)))))
+         ;; Inherit the global navigation keys but disable editing actions
+         ;; which would change Emacs's terminal grid instead of the PTY.
+         (corfu-map (make-composed-keymap (make-sparse-keymap) corfu-map))
+         (this-command 'corfu-first))
+    (dolist (command '(corfu-complete corfu-expand corfu-insert-separator corfu-reset))
+      (define-key corfu-map (vector 'remap command) #'corfu-quit))
+    (define-key corfu-map (kbd "<return>") #'corfu-insert)
+    (define-key corfu-map (kbd "<kp-enter>") #'corfu-insert)
+    ;; Fish has already filtered against the shell input.  An empty region
+    ;; shows all its candidates at the live cursor, without rewriting it.
+    (corfu--setup position position candidates nil)
+    (corfu--exhibit)))
+
+(defun my/ghostel-fish-completion-finished (process source window terminal position input erase)
+  "Offer PROCESS's results in SOURCE only if the original input is still current."
+  (when (memq (process-status process) '(exit signal failed))
+    (let ((output (process-buffer process)) candidates ready)
+      (unwind-protect
+          (when (buffer-live-p source)
+            (with-current-buffer source
+              (when (eq process my/ghostel-completion-process)
+                (my/ghostel-clear-completion)
+                (when (and (eq (process-status process) 'exit)
+                           (zerop (process-exit-status process))
+                           (buffer-live-p output))
+                  (setq ready t candidates (my/ghostel-fish-candidates output))))))
+        (when (buffer-live-p output) (kill-buffer output)))
+      (when (and ready (not (active-minibuffer-window)) (not (input-pending-p))
+                 (eq source (current-buffer))
+                 (my/ghostel-completion-context-p window terminal position input))
+        (if (null candidates)
+            (message "No completions")
+          (my/ghostel-corfu-start candidates window terminal position input erase))))))
+
+(defun my/ghostel-fish-unescape (text)
+  "Decode fish's backslash escapes in TEXT."
+  (let ((out "") (i 0) (n (length text)))
+    (while (< i n)
+      (let ((c (aref text i)))
+        (if (and (eq c ?\\) (< (1+ i) n))
+            (setq out (concat out (if (eq (aref text (1+ i)) ?n) "\n"
+                                    (string (aref text (1+ i)))))
+                  i (+ i 2))
+          (setq out (concat out (string c)) i (1+ i)))))
+    out))
+
+(defun my/ghostel-fish-history ()
+  "Return fish history entries, newest first and without repeats."
+  (let ((file (expand-file-name "fish/fish_history"
+                                (or (getenv "XDG_DATA_HOME") "~/.local/share"))))
+    (when (file-readable-p file)
+      (let (entries)
+        (with-temp-buffer
+          (insert-file-contents file)
+          (goto-char (point-min))
+          (while (re-search-forward "^- cmd: \\(.*\\)$" nil t)
+            (push (my/ghostel-fish-unescape (match-string 1)) entries)))
+        (delete-dups entries)))))
+
+(defun my/ghostel-send-replacement (erase text)
+  "Erase ERASE characters at the terminal, then type TEXT."
+  (dotimes (_ erase) (ghostel--send-encoded "backspace" ""))
+  (unless (string-empty-p text) (ghostel--paste-text text)))
+
+(defun my/ghostel-complete ()
+  "Complete the token at the terminal cursor through fish."
+  (interactive)
+  (unless (and (derived-mode-p 'ghostel-mode) (bound-and-true-p meow-insert-mode))
+    (user-error "Completion is available only while typing at the prompt"))
+  (require 'corfu)
+  (if (corfu--popup-support-p)
+      (my/ghostel-request-fish-completion)
+    (ghostel--send-encoded "tab" "")))
+
+(defun my/ghostel-request-fish-completion ()
+  "Request candidates for the current shell input without blocking Emacs."
+  (let* ((source (current-buffer))
+         (window (selected-window))
+         (terminal ghostel--term)
+         (position (point))
+         (input (my/ghostel-terminal-input))
+         (erase (- position (my/ghostel-terminal-token-start)))
+         (fish (or (executable-find "fish") (user-error "Cannot find fish")))
+         (default-directory (my/ghostel-shell-directory)))
+    (unless (and terminal input) (user-error "No terminal input at point"))
+    (my/ghostel-cancel-completion)
+    (let ((output (generate-new-buffer " *ghostel-fish-completion*")))
+      (condition-case err
+          (setq my/ghostel-completion-process
+                (make-process
+                 :name "ghostel-fish-completion" :buffer output
+                 :connection-type 'pipe :noquery t
+                 :command (list fish "-c" "complete --do-complete=\"$argv[1]\"" "--" input)
+                 :sentinel (lambda (process _event)
+                             (my/ghostel-fish-completion-finished
+                              process source window terminal position input erase))))
+        (error (kill-buffer output) (signal (car err) (cdr err)))))
+    (add-hook 'pre-command-hook #'my/ghostel-cancel-completion nil t)
+    (add-hook 'kill-buffer-hook #'my/ghostel-cancel-completion nil t)))
+
+(defun my/ghostel-history-affixation (candidates)
+  "Prefix fish history CANDIDATES with the same badge as Ghostel's Corfu menu."
+  (let ((badge (if (and (fboundp 'kind-icon-formatted)
+                        (assq 'ghostel-shell kind-icon-mapping))
+                   (kind-icon-formatted 'ghostel-shell)
+                 (propertize " ❯ " 'face 'font-lock-function-name-face))))
+    (mapcar (lambda (candidate) (list candidate badge "")) candidates)))
+
+(defun my/ghostel-history-table (entries)
+  "Make a completion table that preserves fish history order and uses its own icon."
+  (lambda (string predicate action)
+    (if (eq action 'metadata)
+        '(metadata (category . ghostel-fish-history)
+                   (display-sort-function . identity)
+                   (affixation-function . my/ghostel-history-affixation))
+      (complete-with-action action entries string predicate))))
+
+(defun my/ghostel-history ()
+  "Choose a fish history entry and type it at the terminal."
+  (interactive)
+  (unless (and (derived-mode-p 'ghostel-mode) (bound-and-true-p meow-insert-mode))
+    (user-error "History is available only while typing at the prompt"))
+  (let* ((entries (my/ghostel-fish-history))
+         (seed (or (my/ghostel-terminal-input) ""))
+         (choice (completing-read "History: " (my/ghostel-history-table entries) nil t seed)))
+    (when choice
+      (my/ghostel-send-replacement (length seed) choice))))
+
+(defvar my/ghostel-tools-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "TAB") #'my/ghostel-complete)
+    (define-key map (kbd "<tab>") #'my/ghostel-complete)
+    (define-key map (kbd "C-r") #'my/ghostel-history)
+    map)
+  "Emacs-managed completion and history keys for terminal buffers.")
+
+(define-minor-mode my/ghostel-tools-mode
+  "Complete and search history through Emacs instead of the shell's UI."
+  :init-value nil :lighter nil :keymap my/ghostel-tools-map)
+
+(add-hook 'ghostel-mode-hook #'my/ghostel-tools-mode)
+#+end_src
+
+* 从当前目录打开终端
+
+=SPC g g= 从当前文件的目录（无文件时用 =default-directory=）打开或复用
+Ghostel。已有终端忙碌或有未提交输入时，仅记住目标目录；等空的 fish 提示符
+出现再执行 =cd=。tmux 中只跟踪发起时的 pane，不跟随之后的 pane 切换。
+
+#+begin_src emacs-lisp
+(defvar-local my/ghostel-cd-timer nil)
+
+(defvar my/ghostel-tmux-options nil
+  "Options for locating the tmux server, e.g. (\"-L\" \"work\").")
+
+(defvar my/ghostel-empty-fish-prompt-regexp "\\`[[:blank:]]*❯[[:blank:]]*\\'"
+  "Regexp matching an empty prompt row in fish when OSC 133 is unavailable.
+For tmux this must match the whole row, not just the prompt prefix.")
+
+(defun my/ghostel-cd-cancel ()
+  "Clear the queued directory change in this buffer."
+  (when (timerp my/ghostel-cd-timer) (cancel-timer my/ghostel-cd-timer))
+  (setq my/ghostel-cd-timer nil)
+  (remove-hook 'kill-buffer-hook #'my/ghostel-cd-cancel t)
+  (remove-hook 'change-major-mode-hook #'my/ghostel-cd-cancel t))
+
+(defun my/ghostel-local-output (program &rest args)
+  "Return trimmed output from a successful local command."
+  (let ((default-directory temporary-file-directory))
+    (when-let* ((executable (executable-find program)))
+      (with-temp-buffer
+        (when (eq 0 (apply #'call-process executable nil '(t nil) nil args))
+          (string-trim-right (buffer-string)))))))
+
+(defun my/ghostel-tmux (&rest args)
+  (apply #'my/ghostel-local-output "tmux" (append my/ghostel-tmux-options args)))
+
+(defun my/ghostel-tmux-pane (client)
+  "Find the active pane of the tmux client whose process ID is CLIENT."
+  (when-let* ((clients (my/ghostel-tmux "list-clients" "-F" "#{client_pid} #{pane_id}")))
+    (cadr (assoc (number-to-string client)
+                 (mapcar (lambda (line) (split-string line " " t))
+                         (split-string clients "\n" t))))))
+
+(defun my/ghostel-tmux-cd (pane command)
+  "Send COMMAND to PANE only at an empty, foreground fish prompt."
+  (pcase (split-string
+          (or (my/ghostel-tmux
+               "display-message" "-p" "-t" pane
+               "#{pane_id} #{pane_dead} #{pane_in_mode} #{alternate_on} #{pane_current_command} #{pane_pid} #{cursor_x} #{cursor_y}")
+              "") " " t)
+    (`(,id "0" ,in-mode ,alternate ,program ,pid ,column ,row)
+     (cond
+      ((not (equal pane id)) 'gone)
+      ((and (equal in-mode "0") (equal alternate "0") (equal program "fish")
+            ;; pane_current_command alone does not establish PTY ownership.
+            (let ((groups (split-string (or (my/ghostel-local-output
+                                             "ps" "-p" pid "-o" "pgid=" "-o" "tpgid=") ""))))
+              (and (= (length groups) 2)
+                   (> (string-to-number (car groups)) 0)
+                   (equal (car groups) (cadr groups))))
+            (when-let* ((line (my/ghostel-tmux "capture-pane" "-p" "-t" pane "-S" row "-E" row)))
+              (and (> (string-to-number column) 0)
+                   (>= (string-to-number column) (string-width line))
+                   (string-match-p my/ghostel-empty-fish-prompt-regexp line))))
+       (if (my/ghostel-tmux "send-keys" "-t" pane "-l" "--" command
+                            ";" "send-keys" "-t" pane "Enter")
+           'sent 'gone))
+      (t 'waiting)))
+    (_ 'gone)))
+
+(defun my/ghostel-empty-direct-prompt-p ()
+  "Return non-nil if Ghostel's own fish is at an empty prompt."
+  (when-let* ((foreground (ghostel-foreground-pid))
+              ((eql foreground (ghostel--shell-pgid foreground)))
+              ((not (ghostel-command-running-p)))
+              ((equal (my/ghostel-process-name foreground) "fish"))
+              (cursor ghostel--cursor-char-pos)
+              ((<= (point-min) cursor (point-max))))
+    (save-excursion
+      (goto-char cursor)
+      (and (string-blank-p (buffer-substring-no-properties cursor (line-end-position)))
+           (or (and (> cursor (line-beginning-position))
+                    (get-text-property (1- cursor) 'ghostel-prompt))
+               (string-match-p my/ghostel-empty-fish-prompt-regexp
+                               (buffer-substring-no-properties (line-beginning-position) cursor)))))))
+
+(defun my/ghostel-process-name (pid)
+  (when-let* ((name (and pid (alist-get 'comm (process-attributes pid)))))
+    (string-remove-prefix "-" (file-name-nondirectory name))))
+
+(defun my/ghostel-cd-attempt (terminal client pane command)
+  "Try a queued COMMAND in TERMINAL, optionally targeting a tmux CLIENT and PANE."
+  (cond
+   ((not (and (eq ghostel--term terminal) (process-live-p ghostel--process))) 'gone)
+   (pane
+    (if (and (eql client (ghostel-foreground-pid)) (my/ghostel-tmux-pane client))
+        (my/ghostel-tmux-cd pane command)
+      'gone))
+   ((my/ghostel-empty-direct-prompt-p)
+    (ghostel--send-string command)
+    (ghostel--send-encoded "return" "")
+    'sent)
+   (t 'waiting)))
+
+(defun my/ghostel-queue-cd (directory)
+  "Change to DIRECTORY at the next empty shell prompt in this terminal."
+  (my/ghostel-cd-cancel)
+  (let* ((terminal ghostel--term)
+         (foreground (ghostel-foreground-pid))
+         (client (and (member (my/ghostel-process-name foreground) '("tmux" "tmux: client"))
+                      foreground))
+         (pane (and client (my/ghostel-tmux-pane client)))
+         (command (concat "cd -- " (shell-quote-argument directory)))
+         (buffer (current-buffer)))
+    (cond
+     ((and client (not pane))
+      (message "Ghostel: cannot locate this tmux client; no cd sent"))
+     ((eq 'waiting (my/ghostel-cd-attempt terminal client pane command))
+      (add-hook 'kill-buffer-hook #'my/ghostel-cd-cancel nil t)
+      (add-hook 'change-major-mode-hook #'my/ghostel-cd-cancel nil t)
+      (setq my/ghostel-cd-timer
+            (run-at-time 0.5 0.5
+                         (lambda ()
+                           (with-current-buffer buffer
+                             (unless (eq 'waiting (my/ghostel-cd-attempt terminal client pane command))
+                               (my/ghostel-cd-cancel))))))
+      (message "Ghostel: will cd to %s at the next empty fish prompt"
+               (abbreviate-file-name directory))))))
+
+(defun my/ghostel-here ()
+  "Open or reuse a local Ghostel shell from the current buffer's directory."
+  (interactive)
+  (require 'ghostel)
+  (let* ((directory (expand-file-name (if buffer-file-name
+                                          (file-name-directory buffer-file-name)
+                                        default-directory)))
+         (buffer (seq-find
+                  (lambda (buf)
+                    (with-current-buffer buf
+                      (and (derived-mode-p 'ghostel-mode)
+                           (eq (alist-get 'kind ghostel-identity) 'term)
+                           (not (file-remote-p default-directory))
+                           ghostel--term (process-live-p ghostel--process))))
+                  (buffer-list))))
+    (when (or (file-remote-p directory) (not (file-directory-p directory))
+              (string-match-p "[[:cntrl:]]" directory))
+      (user-error "Ghostel: not a usable local directory: %s" directory))
+    (if buffer
+        (progn
+          (pop-to-buffer-same-window buffer)
+          (when (and (bound-and-true-p meow-mode) (not (bound-and-true-p meow-insert-mode)))
+            (call-interactively #'meow-insert))
+          (my/ghostel-queue-cd directory))
+      (let ((default-directory (file-name-as-directory directory)))
+        (ghostel t)))))
 #+end_src
 
 * 动态键位速查
@@ -3066,6 +3507,17 @@ SOURCE-WINDOW is non-nil for Isearch, which has no minibuffer window."
           (my/rime-isearch-toggle)
         (funcall original)))
 
+    (defun my/rime-isearch-preview (original &optional quoted)
+      "Show Rime's pending text in the Isearch prompt without searching for it."
+      (let ((suffix (funcall original quoted)))
+        (if-let* (((not quoted))
+                  ((bound-and-true-p isearch-mode))
+                  ((eq my/rime--isearch-state 'chinese))
+                  (preview (rime--current-preedit))
+                  ((not (string-empty-p preview))))
+            (concat (propertize preview 'face 'rime-preedit-face) suffix)
+          suffix)))
+
     (defun my/rime-isearch-feed (key)
       "Send KEY to Rime and append any committed text to Isearch only."
       (let ((handled (rime-lib-process-key key 0)))
@@ -3292,6 +3744,7 @@ away; repainting the whole frame instead makes the box flicker."
     (add-hook 'isearch-mode-end-hook #'my/rime-isearch-end)
     (advice-add 'isearch-toggle-input-method :around #'my/rime-isearch-toggle-default-method)
     (advice-add 'isearch-printing-char :around #'my/rime-isearch-printing-char)
+    (advice-add 'isearch-message-suffix :around #'my/rime-isearch-preview)
     (advice-add 'isearch-delete-char :around #'my/rime-isearch-backspace)
     (advice-add 'isearch-exit :around #'my/rime-isearch-return)
     (add-to-list 'rime-disable-predicates #'my/rime--ascii-only)
