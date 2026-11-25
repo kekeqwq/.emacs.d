@@ -698,15 +698,15 @@ for glyph and icon widths that do not fit that estimate exactly."
             lines)))
 
   (use-package corfu
+    :demand t
     :custom
     (corfu-auto t)
     (corfu-cycle t)
     (global-corfu-minibuffer nil)
-    :init
+    :config
     (my/corfu-cycle-keys)
     (advice-add 'corfu--format-candidates :around #'my/corfu-pad-popup-width)
-    (global-corfu-mode)
-    :config
+    (global-corfu-mode 1)
     (setq corfu-border-width 1)
     (my/completion-sync-theme))
 #+end_src
