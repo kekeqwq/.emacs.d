@@ -1183,12 +1183,17 @@ GUI 才加载的主题。tree-sitter 上色完成后补绘，忽略字符串和�
     ;; custom-theme-load-path 后再 load-theme，否则 Windows 上
     ;; 会报 Unable to find theme file for batppuccin-latte。
     (defun my/load-theme (&optional appearance)
-      "Load the platform palette once, or when macOS appearance changes."
-      (let ((theme (if (or (eq system-type 'gnu/linux) (eq appearance 'dark))
-                       'batppuccin-mocha 'batppuccin-latte)))
-        (unless (equal custom-enabled-themes (list theme))
-          (mapc #'disable-theme custom-enabled-themes)
-          (load-theme theme t))))
+      "Follow the NixOS desktop if enabled, otherwise use the platform palette."
+      ;; The desktop switcher notifies the daemon even without a GUI frame.
+      ;; Don't overwrite that choice with Mocha when a client opens a window.
+      (unless (and (eq system-type 'gnu/linux)
+                   (fboundp 'flakes-appearance-apply)
+                   (flakes-appearance-apply))
+        (let ((theme (if (or (eq system-type 'gnu/linux) (eq appearance 'dark))
+                         'batppuccin-mocha 'batppuccin-latte)))
+          (unless (equal custom-enabled-themes (list theme))
+            (mapc #'disable-theme custom-enabled-themes)
+            (load-theme theme t)))))
     (defun my/apply-client-frame-theme (&optional frame)
       "Daemon startup has no GUI; defer appearance detection until a frame exists."
       (let ((frame (or frame (selected-frame))))
